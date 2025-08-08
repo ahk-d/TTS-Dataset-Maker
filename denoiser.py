@@ -114,8 +114,17 @@ class Denoiser:
         # Handle NaN and infinite values
         audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
         
-        # Convert to torch tensor
+        # Ensure it's 1D
+        if audio.ndim != 1:
+            audio = audio.flatten()
+        
+        # Convert to torch tensor and ensure correct shape
         audio_tensor = torch.from_numpy(audio)
+        
+        # DeepFilterNet expects (batch_size, channels, samples) or (channels, samples)
+        # We have (samples), so we need to add channel dimension
+        if audio_tensor.ndim == 1:
+            audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
         
         return audio_tensor
     
@@ -180,6 +189,9 @@ class Denoiser:
             
         except Exception as e:
             logger.error(f"File denoising failed: {e}")
+            # Don't create an empty or corrupted file
+            if os.path.exists(output_path):
+                os.remove(output_path)
             return False
     
     def denoise_segments(self, metadata_path: str, output_dir: str) -> Dict[str, Any]:

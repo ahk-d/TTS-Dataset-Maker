@@ -82,13 +82,18 @@ def denoise_audio(audio_path, denoised_path=None):
         
         print("🔇 Denoising audio...")
         denoiser = Denoiser()
-        denoiser.denoise_file(audio_path, denoised_path)
+        success = denoiser.denoise_file(audio_path, denoised_path)
         
-        print(f"✓ Denoised audio saved to: {denoised_path}")
-        return denoised_path
+        if success:
+            print(f"✓ Denoised audio saved to: {denoised_path}")
+            return denoised_path
+        else:
+            print("⚠️  Denoising failed, using original audio")
+            return audio_path
         
-    except ImportError:
-        print("⚠️  Denoiser not available, skipping denoising")
+    except ImportError as e:
+        print(f"⚠️  Denoiser not available: {e}")
+        print("💡 Install DeepFilterNet with: pip install deepfilternet")
         return audio_path
     except Exception as e:
         print(f"⚠️  Denoising failed: {e}, using original audio")
