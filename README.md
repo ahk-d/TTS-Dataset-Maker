@@ -52,6 +52,9 @@ This will:
 - `--force-download`: Re-download even if audio file exists
 - `--force-process`: Re-process with AssemblyAI even if JSON exists
 
+**Audio Processing Options:**
+- `--denoise`: Apply denoising before transcription (requires denoiser module)
+
 ### 2. Launch the Explorer Interface
 
 After processing the video, launch the Gradio interface:

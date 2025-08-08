@@ -69,6 +69,28 @@ def download_youtube_video(url, output_path="output/audio.wav", force_download=F
         print(f"✗ Error downloading video: {e}")
         return False
 
+def denoise_audio(audio_path, denoised_path=None):
+    """Denoise audio using the denoiser module."""
+    try:
+        from denoiser import Denoiser
+        
+        if denoised_path is None:
+            denoised_path = audio_path.replace('.wav', '_denoised.wav')
+        
+        print("🔇 Denoising audio...")
+        denoiser = Denoiser()
+        denoiser.denoise_file(audio_path, denoised_path)
+        
+        print(f"✓ Denoised audio saved to: {denoised_path}")
+        return denoised_path
+        
+    except ImportError:
+        print("⚠️  Denoiser not available, skipping denoising")
+        return audio_path
+    except Exception as e:
+        print(f"⚠️  Denoising failed: {e}, using original audio")
+        return audio_path
+
 def process_with_assemblyai(audio_path, api_key, force_process=False):
     """Process audio with AssemblyAI for transcription and speaker diarization."""
     try:
@@ -95,7 +117,6 @@ def process_with_assemblyai(audio_path, api_key, force_process=False):
         # Create transcript
         config = aai.TranscriptionConfig(
             speaker_labels=True,
-            speaker_count=2,  # Adjust based on your needs
             auto_highlights=True,
             auto_chapters=True
         )
@@ -156,6 +177,7 @@ def main():
     parser.add_argument("--output-dir", default="output", help="Output directory")
     parser.add_argument("--force-download", action="store_true", help="Force re-download even if file exists")
     parser.add_argument("--force-process", action="store_true", help="Force re-process with AssemblyAI even if JSON exists")
+    parser.add_argument("--denoise", action="store_true", help="Apply denoising before transcription")
     
     args = parser.parse_args()
     
@@ -173,6 +195,11 @@ def main():
     if not download_youtube_video(args.url, audio_path, args.force_download):
         print("Failed to download video. Exiting.")
         return 1
+    
+    # Denoise audio if requested
+    if args.denoise:
+        denoised_path = os.path.join(args.output_dir, "audio_denoised.wav")
+        audio_path = denoise_audio(audio_path, denoised_path)
     
     # Process with AssemblyAI
     if not process_with_assemblyai(audio_path, args.assemblyai_key, args.force_process):

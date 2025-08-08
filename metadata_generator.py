@@ -219,7 +219,7 @@ def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Generate metadata and extract audio segments using pydub")
     parser.add_argument("--json-path", default="output/tts_dataset.json", help="Path to JSON file")
-    parser.add_argument("--audio-path", default="output/audio.wav", help="Path to audio file")
+    parser.add_argument("--audio-path", default="output/audio.wav", help="Path to audio file (or denoised version)")
     parser.add_argument("--output-dir", default="output/segments", help="Output directory")
     parser.add_argument("--min-duration", type=float, default=0.5, help="Minimum segment duration (seconds)")
     parser.add_argument("--max-duration", type=float, default=30.0, help="Maximum segment duration (seconds)")

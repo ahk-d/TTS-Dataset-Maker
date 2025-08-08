@@ -3,4 +3,6 @@ assemblyai
 gradio==5.*
 pydub
 pandas
-numpy 
+numpy
+scipy
+torch 
