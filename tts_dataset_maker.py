@@ -14,15 +14,7 @@ import subprocess
 import json
 from pathlib import Path
 
-def install_dependencies():
-    """Install required dependencies."""
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp", "assemblyai", "-q"])
-        print("✓ Dependencies installed successfully")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Error installing dependencies: {e}")
-        return False
+
 
 def download_youtube_video(url, output_path="output/audio.wav", force_download=False):
     """Download YouTube video and extract audio with caching."""
@@ -183,12 +175,6 @@ def main():
     
     print("🎵 TTS Dataset Maker - YouTube Processor")
     print("=" * 50)
-    
-    # Install dependencies
-    print("Installing dependencies...")
-    if not install_dependencies():
-        print("Failed to install dependencies. Exiting.")
-        return 1
     
     # Download video
     audio_path = os.path.join(args.output_dir, "audio.wav")

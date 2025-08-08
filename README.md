@@ -12,6 +12,9 @@ TTS-Dataset-Maker/
 ├── ui_components.py          # Gradio interface components and event handlers
 ├── youtube_processor.py      # Wrapper for YouTube processing
 ├── metadata_generator.py     # Generates metadata and extracts audio segments
+├── denoiser.py              # Professional audio denoising
+├── install_dependencies.py   # Centralized dependency installer
+├── test_setup.py            # Setup validation
 ├── requirements.txt          # Python dependencies
 ├── setup.py                  # Package setup
 ├── README.md                 # Documentation
@@ -30,6 +33,10 @@ cd TTS-Dataset-Maker
 
 2. **Install dependencies:**
 ```bash
+# Option 1: Use the centralized installer (recommended)
+python install_dependencies.py
+
+# Option 2: Manual installation
 pip install -r requirements.txt
 ```
 
@@ -97,7 +104,7 @@ This will:
 ### YouTube Processing (`tts_dataset_maker.py`)
 - Downloads YouTube videos and extracts audio
 - Processes with AssemblyAI for transcription and speaker diarization
-- Handles command-line arguments and dependency installation
+- Handles command-line arguments
 
 ### Metadata Generation (`metadata_generator.py`)
 - Extracts individual audio segments for each speaker
