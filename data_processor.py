@@ -1,8 +1,8 @@
 import json
 import os
 import numpy as np
-import soundfile as sf
 import pandas as pd
+from pydub import AudioSegment
 
 class DataProcessor:
     def __init__(self, json_path="output/tts_dataset.json", audio_path="output/audio.wav"):
@@ -39,11 +39,22 @@ class DataProcessor:
         self.df.insert(0, "id", range(len(self.df)))  # stable row id
     
     def _load_audio(self):
-        """Load the full audio file."""
-        self.full_audio, self.sr = sf.read(self.audio_path, always_2d=False)
-        is_stereo = self.full_audio.ndim == 2
-        n_samples = self.full_audio.shape[0] if not is_stereo else self.full_audio.shape[0]
-        self.duration_total = n_samples / self.sr
+        """Load the full audio file using pydub."""
+        try:
+            self.audio = AudioSegment.from_wav(self.audio_path)
+            self.sr = self.audio.frame_rate
+            self.duration_total = len(self.audio) / 1000.0  # Convert ms to seconds
+            print(f"Loaded audio: {len(self.audio)}ms, Sample rate: {self.sr} Hz")
+        except Exception as e:
+            print(f"Error loading audio with pydub: {e}")
+            print("Trying to convert from other formats...")
+            try:
+                self.audio = AudioSegment.from_file(self.audio_path)
+                self.sr = self.audio.frame_rate
+                self.duration_total = len(self.audio) / 1000.0
+                print(f"Loaded audio: {len(self.audio)}ms, Sample rate: {self.sr} Hz")
+            except Exception as e2:
+                raise Exception(f"Could not load audio file: {e2}")
     
     def get_filtered_table(self, speaker_filter: str, query: str):
         """Return a filtered DataFrame for the UI."""
@@ -57,7 +68,7 @@ class DataProcessor:
         return dd[["id", "speaker", "start", "end", "duration_s", "text"]].reset_index(drop=True)
     
     def get_audio_slice(self, row_idx, current_table):
-        """Get audio slice for a specific row."""
+        """Get audio slice for a specific row using pydub."""
         try:
             if row_idx is None or row_idx < 0 or row_idx >= len(current_table):
                 return None, "", ""
@@ -73,48 +84,60 @@ class DataProcessor:
             row = row.iloc[0]
             start_s, end_s, speaker, text = row["start"], row["end"], row["speaker"], row["text"]
             
-            # Create audio slice
-            start_idx = int(round(start_s * self.sr))
-            end_idx = int(round(end_s * self.sr))
-            audio_slice = self.full_audio[start_idx:end_idx]
+            # Create audio slice using pydub
+            start_ms = int(start_s * 1000)
+            end_ms = int(end_s * 1000)
+            audio_slice = self.audio[start_ms:end_ms]
             
-            return (self.sr, audio_slice), f"{speaker} — {start_s:.2f}s → {end_s:.2f}s", text
+            # Convert to numpy array for Gradio
+            import numpy as np
+            samples = np.array(audio_slice.get_array_of_samples())
+            if audio_slice.channels == 2:
+                samples = samples.reshape((-1, 2))
+            
+            return (self.sr, samples), f"{speaker} — {start_s:.2f}s → {end_s:.2f}s", text
             
         except Exception as e:
             print(f"Error in audio slice: {e}")
             return None, "", ""
     
     def get_concatenated_audio(self, speaker_filter: str, query: str):
-        """Concatenate all segments for the current filter (speaker + query)."""
+        """Concatenate all segments for the current filter (speaker + query) using pydub."""
         table = self.get_filtered_table(speaker_filter, query)
         if table.empty:
             return None, "No segments match.", ""
         
         # Build concatenation with 200 ms silence between segments
-        silence_len = int(0.2 * self.sr)
-        silence = np.zeros((silence_len, self.full_audio.shape[1])) if self.full_audio.ndim == 2 else np.zeros(silence_len)
+        silence = AudioSegment.silent(duration=200)  # 200ms silence
         
         pieces = []
         transcript_parts = []
         for _, r in table.iterrows():
             start_s, end_s = float(r["start"]), float(r["end"])
-            start_idx = int(round(start_s * self.sr))
-            end_idx = int(round(end_s * self.sr))
-            pieces.append(self.full_audio[start_idx:end_idx])
+            start_ms = int(start_s * 1000)
+            end_ms = int(end_s * 1000)
+            segment = self.audio[start_ms:end_ms]
+            pieces.append(segment)
             transcript_parts.append(f"[{r['speaker']} {start_s:.2f}–{end_s:.2f}] {r['text']}")
             pieces.append(silence)
         
         if pieces:
             # Drop trailing silence
             pieces = pieces[:-1] if len(pieces) > 1 else pieces
-            concat = np.concatenate(pieces, axis=0)
+            concat = sum(pieces, AudioSegment.empty())
         else:
             return None, "No segments match.", ""
+        
+        # Convert to numpy array for Gradio
+        import numpy as np
+        samples = np.array(concat.get_array_of_samples())
+        if concat.channels == 2:
+            samples = samples.reshape((-1, 2))
         
         # Return as (sr, np.array) for Gradio Audio
         meta = f"Concatenated {len(table)} segment(s)"
         full_text = "\n\n".join(transcript_parts)
-        return (self.sr, concat), meta, full_text
+        return (self.sr, samples), meta, full_text
     
     def get_speaker_choices(self):
         """Get list of speaker choices for dropdown."""

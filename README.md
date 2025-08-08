@@ -44,9 +44,13 @@ python tts_dataset_maker.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --as
 ```
 
 This will:
-- Download the YouTube video and extract audio
-- Process it with AssemblyAI for transcription and speaker diarization
+- Download the YouTube video and extract audio (cached if already downloaded)
+- Process it with AssemblyAI for transcription and speaker diarization (cached if already processed)
 - Save the results to `output/tts_dataset.json` and `output/audio.wav`
+
+**Caching Options:**
+- `--force-download`: Re-download even if audio file exists
+- `--force-process`: Re-process with AssemblyAI even if JSON exists
 
 ### 2. Launch the Explorer Interface
 

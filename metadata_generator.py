@@ -4,17 +4,16 @@
 Metadata Generator for TTS Dataset Maker
 
 This script generates metadata files and extracts individual audio segments
-for each speaker segment, creating a structured dataset for TTS training.
+for each speaker segment using pydub, creating a structured dataset for TTS training.
 """
 
 import json
 import os
-import numpy as np
-import soundfile as sf
 import pandas as pd
 from pathlib import Path
 import argparse
 from typing import List, Dict, Any
+from pydub import AudioSegment
 
 class MetadataGenerator:
     def __init__(self, json_path="output/tts_dataset.json", audio_path="output/audio.wav", output_dir="output/segments"):
@@ -48,24 +47,35 @@ class MetadataGenerator:
         self.df.insert(0, "id", range(len(self.df)))
     
     def _load_audio(self):
-        """Load the full audio file."""
-        self.full_audio, self.sr = sf.read(self.audio_path, always_2d=False)
-        print(f"Loaded audio: {self.full_audio.shape}, Sample rate: {self.sr} Hz")
+        """Load the full audio file using pydub."""
+        try:
+            self.audio = AudioSegment.from_wav(self.audio_path)
+            print(f"Loaded audio: {len(self.audio)}ms, Sample rate: {self.audio.frame_rate} Hz")
+        except Exception as e:
+            print(f"Error loading audio with pydub: {e}")
+            print("Trying to convert from other formats...")
+            # Try other formats
+            try:
+                self.audio = AudioSegment.from_file(self.audio_path)
+                print(f"Loaded audio: {len(self.audio)}ms, Sample rate: {self.audio.frame_rate} Hz")
+            except Exception as e2:
+                raise Exception(f"Could not load audio file: {e2}")
     
     def extract_audio_segment(self, start_s: float, end_s: float, segment_id: int) -> str:
-        """Extract audio segment and save to file."""
-        start_idx = int(round(start_s * self.sr))
-        end_idx = int(round(end_s * self.sr))
+        """Extract audio segment using pydub and save to file."""
+        # Convert seconds to milliseconds for pydub
+        start_ms = int(start_s * 1000)
+        end_ms = int(end_s * 1000)
         
-        # Extract segment
-        audio_segment = self.full_audio[start_idx:end_idx]
+        # Extract segment using pydub
+        audio_segment = self.audio[start_ms:end_ms]
         
         # Generate filename
         filename = f"segment_{segment_id:06d}.wav"
         filepath = self.segments_dir / filename
         
-        # Save segment
-        sf.write(filepath, audio_segment, self.sr)
+        # Save segment using pydub
+        audio_segment.export(str(filepath), format="wav")
         
         return str(filepath)
     
@@ -84,8 +94,8 @@ class MetadataGenerator:
         return text.strip()
     
     def generate_metadata(self, min_duration: float = 0.5, max_duration: float = 30.0):
-        """Generate metadata files and extract audio segments."""
-        print(f"Processing {len(self.df)} segments...")
+        """Generate metadata files and extract audio segments using pydub."""
+        print(f"Processing {len(self.df)} segments with pydub...")
         
         metadata_raw = []
         metadata_clean = []
@@ -110,7 +120,7 @@ class MetadataGenerator:
                 print(f"Skipping segment {idx}: text too short after cleaning")
                 continue
             
-            # Extract audio segment
+            # Extract audio segment using pydub
             try:
                 audio_path = self.extract_audio_segment(start_s, end_s, idx)
                 
@@ -123,7 +133,7 @@ class MetadataGenerator:
                     "duration_s": duration_s,
                     "text": text,
                     "audio_path": audio_path,
-                    "sample_rate": self.sr
+                    "sample_rate": self.audio.frame_rate
                 }
                 metadata_raw.append(raw_entry)
                 
@@ -136,7 +146,7 @@ class MetadataGenerator:
                     "duration_s": duration_s,
                     "text": clean_text,
                     "audio_path": audio_path,
-                    "sample_rate": self.sr
+                    "sample_rate": self.audio.frame_rate
                 }
                 metadata_clean.append(clean_entry)
                 
@@ -150,7 +160,7 @@ class MetadataGenerator:
         self._save_metadata(metadata_raw, "metadata_raw.json")
         self._save_metadata(metadata_clean, "metadata.json")
         
-        print(f"\n✅ Generated {len(metadata_raw)} segments")
+        print(f"\n✅ Generated {len(metadata_raw)} segments using pydub")
         print(f"📁 Audio segments saved to: {self.segments_dir}")
         print(f"📄 Metadata files saved to: {self.output_dir}")
         
@@ -164,9 +174,10 @@ class MetadataGenerator:
         output_data = {
             "dataset_info": {
                 "total_segments": len(metadata),
-                "sample_rate": self.sr,
+                "sample_rate": self.audio.frame_rate,
                 "source_audio": self.audio_path,
-                "generated_at": pd.Timestamp.now().isoformat()
+                "generated_at": pd.Timestamp.now().isoformat(),
+                "audio_processor": "pydub"
             },
             "segments": metadata
         }
@@ -206,7 +217,7 @@ class MetadataGenerator:
 
 def main():
     """Main function."""
-    parser = argparse.ArgumentParser(description="Generate metadata and extract audio segments")
+    parser = argparse.ArgumentParser(description="Generate metadata and extract audio segments using pydub")
     parser.add_argument("--json-path", default="output/tts_dataset.json", help="Path to JSON file")
     parser.add_argument("--audio-path", default="output/audio.wav", help="Path to audio file")
     parser.add_argument("--output-dir", default="output/segments", help="Output directory")
@@ -215,7 +226,7 @@ def main():
     
     args = parser.parse_args()
     
-    print("🎵 TTS Dataset Metadata Generator")
+    print("🎵 TTS Dataset Metadata Generator (using pydub)")
     print("=" * 50)
     
     try:

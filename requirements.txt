@@ -1,6 +1,6 @@
 yt-dlp
 assemblyai
 gradio==5.*
-soundfile
+pydub
 pandas
 numpy 
