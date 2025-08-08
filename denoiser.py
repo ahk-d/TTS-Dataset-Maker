@@ -114,9 +114,12 @@ class Denoiser:
         # Handle NaN and infinite values
         audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
         
-        # Ensure it's 1D
+        # Ensure it's 1D and contiguous
         if audio.ndim != 1:
             audio = audio.flatten()
+        
+        # Ensure numpy array is contiguous
+        audio = np.ascontiguousarray(audio)
         
         # Convert to torch tensor and ensure correct shape
         audio_tensor = torch.from_numpy(audio)
@@ -125,6 +128,9 @@ class Denoiser:
         # We have (samples), so we need to add channel dimension
         if audio_tensor.ndim == 1:
             audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
+        
+        # Ensure tensor is contiguous
+        audio_tensor = audio_tensor.contiguous()
         
         return audio_tensor
     
@@ -159,6 +165,38 @@ class Denoiser:
             
         except Exception as e:
             logger.error(f"DeepFilterNet denoising failed: {e}")
+            
+            # Try CPU fallback if CUDA error
+            if "CUDNN" in str(e) or "CUDA" in str(e):
+                logger.info("Trying CPU fallback...")
+                try:
+                    # Move model to CPU temporarily
+                    original_device = next(self.model.parameters()).device
+                    self.model = self.model.cpu()
+                    
+                    # Prepare audio for CPU
+                    audio_tensor = self._prepare_audio_for_deepfilter(audio)
+                    audio_tensor = audio_tensor.cpu()
+                    
+                    # Apply DeepFilterNet denoising on CPU
+                    with torch.no_grad():
+                        enhanced = enhance(self.model, self.df_state, audio_tensor)
+                    
+                    # Convert back to numpy
+                    denoised_audio = enhanced.squeeze().cpu().numpy()
+                    
+                    # Move model back to original device
+                    self.model = self.model.to(original_device)
+                    
+                    logger.info("✓ DeepFilterNet denoising completed on CPU")
+                    return denoised_audio
+                    
+                except Exception as cpu_e:
+                    logger.error(f"CPU fallback also failed: {cpu_e}")
+                    # Move model back to original device
+                    if 'original_device' in locals():
+                        self.model = self.model.to(original_device)
+            
             raise RuntimeError(f"DeepFilterNet denoising failed: {e}")
     
     def denoise_file(self, input_path: str, output_path: str) -> bool:
