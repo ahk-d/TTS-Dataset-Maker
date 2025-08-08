@@ -6,14 +6,18 @@ A modular tool for creating and exploring TTS (Text-to-Speech) datasets from You
 
 ```
 TTS-Dataset-Maker/
-├── main.py                    # Main entry point for the Gradio interface
-├── data_processor.py          # Handles JSON and audio file operations
-├── ui_components.py           # Gradio interface components and event handlers
-├── youtube_processor.py       # YouTube video processing utilities
-├── metadata_generator.py      # Generates metadata and extracts audio segments
-├── requirements.txt           # Python dependencies
-├── README.md                 # This file
-└── tts_dataset_maker.py      # Original script (for reference)
+├── tts_dataset_maker.py      # Main YouTube processor and AssemblyAI integration
+├── main.py                   # Gradio interface launcher
+├── data_processor.py         # Handles JSON and audio file operations
+├── ui_components.py          # Gradio interface components and event handlers
+├── youtube_processor.py      # Wrapper for YouTube processing
+├── metadata_generator.py     # Generates metadata and extracts audio segments
+├── requirements.txt          # Python dependencies
+├── setup.py                  # Package setup
+├── README.md                 # Documentation
+├── LICENSE                   # MIT License
+├── CONTRIBUTING.md           # Contributing guidelines
+└── .gitignore               # Git ignore rules
 ```
 
 ## Installation
@@ -36,11 +40,11 @@ pip install -r requirements.txt
 First, you need to process a YouTube video to create the dataset:
 
 ```bash
-python youtube_processor.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --assemblyai-key "YOUR_ASSEMBLYAI_KEY"
+python tts_dataset_maker.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --assemblyai-key "YOUR_ASSEMBLYAI_KEY"
 ```
 
 This will:
-- Download the YouTube video
+- Download the YouTube video and extract audio
 - Process it with AssemblyAI for transcription and speaker diarization
 - Save the results to `output/tts_dataset.json` and `output/audio.wav`
 
@@ -83,9 +87,10 @@ This will:
 - Handles user interactions (filtering, row selection)
 - Manages audio playback and segment exploration
 
-### YouTube Processing (`youtube_processor.py`)
-- Processes YouTube videos with AssemblyAI
-- Handles command-line arguments
+### YouTube Processing (`tts_dataset_maker.py`)
+- Downloads YouTube videos and extracts audio
+- Processes with AssemblyAI for transcription and speaker diarization
+- Handles command-line arguments and dependency installation
 
 ### Metadata Generation (`metadata_generator.py`)
 - Extracts individual audio segments for each speaker
