@@ -22,26 +22,34 @@ def download_youtube_video(url, output_path="output/audio.wav", force_download=F
         # Create output directory
         Path(output_path).parent.mkdir(exist_ok=True)
         
-        # Check if file already exists
-        if os.path.exists(output_path) and not force_download:
-            file_size = os.path.getsize(output_path)
+        # Generate cache key based on URL
+        import hashlib
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+        cache_path = output_path.replace('.wav', f'_{url_hash}.wav')
+        
+        # Check if cached file already exists for this specific URL
+        if os.path.exists(cache_path) and not force_download:
+            file_size = os.path.getsize(cache_path)
             if file_size > 1024:  # At least 1KB to ensure it's not empty
-                print(f"📁 Audio file already exists: {output_path}")
+                print(f"📁 Audio file already exists for this URL: {cache_path}")
                 print(f"📊 File size: {file_size / (1024*1024):.2f} MB")
                 print("⏭️  Skipping download (use --force-download to re-download)")
+                # Copy cached file to requested output path
+                import shutil
+                shutil.copy2(cache_path, output_path)
                 return True
             else:
-                print(f"⚠️  Existing file is too small ({file_size} bytes), re-downloading...")
-        elif force_download and os.path.exists(output_path):
+                print(f"⚠️  Existing cached file is too small ({file_size} bytes), re-downloading...")
+        elif force_download and os.path.exists(cache_path):
             print("🔄 Force download requested, re-downloading...")
         
-        # Download with yt-dlp
+        # Download with yt-dlp to cache path
         cmd = [
             "yt-dlp",
             "-x",  # Extract audio
             "--audio-format", "wav",
             "--audio-quality", "0",  # Best quality
-            "-o", output_path,
+            "-o", cache_path,
             url
         ]
         
@@ -49,6 +57,9 @@ def download_youtube_video(url, output_path="output/audio.wav", force_download=F
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
+            # Copy from cache to final output path
+            import shutil
+            shutil.copy2(cache_path, output_path)
             file_size = os.path.getsize(output_path)
             print(f"✓ Audio downloaded to: {output_path}")
             print(f"📊 File size: {file_size / (1024*1024):.2f} MB")
@@ -83,7 +94,7 @@ def denoise_audio(audio_path, denoised_path=None):
         print(f"⚠️  Denoising failed: {e}, using original audio")
         return audio_path
 
-def process_with_assemblyai(audio_path, api_key, force_process=False):
+def process_with_assemblyai(audio_path, api_key, url=None, force_process=False):
     """Process audio with AssemblyAI for transcription and speaker diarization."""
     try:
         import assemblyai as aai
@@ -91,17 +102,27 @@ def process_with_assemblyai(audio_path, api_key, force_process=False):
         # Configure AssemblyAI
         aai.settings.api_key = api_key
         
-        # Check if JSON already exists
-        json_path = "output/tts_dataset.json"
+        # Generate cache key based on URL
+        if url:
+            import hashlib
+            url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+            json_path = f"output/tts_dataset_{url_hash}.json"
+        else:
+            json_path = "output/tts_dataset.json"
+        
+        # Check if JSON already exists for this specific URL
         if os.path.exists(json_path) and not force_process:
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 segments = data.get("segments", [])
                 if segments:
-                    print(f"📁 Transcription already exists: {json_path}")
+                    print(f"📁 Transcription already exists for this URL: {json_path}")
                     print(f"📊 Found {len(segments)} segments")
                     print("⏭️  Skipping AssemblyAI processing (use --force-process to re-process)")
+                    # Copy cached JSON to standard output path
+                    import shutil
+                    shutil.copy2(json_path, "output/tts_dataset.json")
                     return True
             except Exception as e:
                 print(f"⚠️  Error reading existing JSON: {e}, re-processing...")
@@ -120,9 +141,8 @@ def process_with_assemblyai(audio_path, api_key, force_process=False):
             print(f"✗ Transcription failed: {transcript.error}")
             return False
         
-        # Save results
-        output_path = "output/tts_dataset.json"
-        Path(output_path).parent.mkdir(exist_ok=True)
+        # Save results to cache path
+        Path(json_path).parent.mkdir(exist_ok=True)
         
         # Convert to our format
         segments = []
@@ -142,15 +162,17 @@ def process_with_assemblyai(audio_path, api_key, force_process=False):
             "metadata": {
                 "total_duration": transcript.audio_duration / 1000.0,
                 "sample_rate": 16000,  # AssemblyAI standard
-                "language": transcript.language_code,
-                "created_at": transcript.created_at
             }
         }
         
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
-        print(f"✓ Results saved to: {output_path}")
+        # Copy to standard output path
+        import shutil
+        shutil.copy2(json_path, "output/tts_dataset.json")
+        
+        print(f"✓ Results saved to: {json_path}")
         print(f"✓ Processed {len(segments)} segments")
         return True
         
@@ -188,7 +210,7 @@ def main():
         audio_path = denoise_audio(audio_path, denoised_path)
     
     # Process with AssemblyAI
-    if not process_with_assemblyai(audio_path, args.assemblyai_key, args.force_process):
+    if not process_with_assemblyai(audio_path, args.assemblyai_key, args.url, args.force_process):
         print("Failed to process with AssemblyAI. Exiting.")
         return 1
     
