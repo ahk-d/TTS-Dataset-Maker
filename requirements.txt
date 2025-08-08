@@ -1,0 +1,6 @@
+yt-dlp
+assemblyai
+gradio==5.*
+soundfile
+pandas
+numpy 
