@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from tts_pipeline.integrations.assemblyai import AssemblyAIClient
 from tts_pipeline.integrations.label_studio import LabelStudioManager
 from tts_pipeline.config.settings import settings
+from tts_pipeline.tasks.audio_processing import preprocess_audio
 
 # Configure logging
 logging.basicConfig(
@@ -130,25 +131,26 @@ class Processor:
         """Process a single audio file"""
         logger.info(f"Processing: {file_path}")
         
-        # Load audio
-        audio, sample_rate = librosa.load(file_path, sr=24000)
-        logger.info(f"Loaded audio: {len(audio)/sample_rate:.2f}s at {sample_rate}Hz")
-        
-        # Convert to mono if stereo
-        if audio.ndim > 1:
-            audio = librosa.to_mono(audio)
-        
-        # Remove long silences if enabled
-        if settings.remove_long_silences:
-            audio = self.remove_long_silences(audio, sample_rate)
-        
-        # Normalize audio
+        preprocessed = preprocess_audio(
+            file_path,
+            enable_denoising=settings.denoising_enabled,
+        )
+
+        audio = preprocessed["audio"]
+        sample_rate = preprocessed["sample_rate"]
+
+        if sample_rate != 24000:
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=24000)
+            sample_rate = 24000
+
         audio = librosa.util.normalize(audio)
-        
+
         return {
             "audio": audio,
             "sample_rate": sample_rate,
-            "duration": len(audio) / sample_rate
+            "duration": len(audio) / sample_rate,
+            "denoising_metrics": preprocessed.get("denoising_metrics", {}),
+            "silence_removal_metrics": preprocessed.get("silence_removal_metrics", {}),
         }
     
     def transcribe_audio(self, audio_file: str) -> Dict:

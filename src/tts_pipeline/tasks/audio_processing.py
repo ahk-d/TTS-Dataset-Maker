@@ -2,11 +2,18 @@
 Audio processing tasks for TTS dataset creation
 Includes Silero VAD-based silence removal and denoising
 """
+import gc
 import logging
-import numpy as np
-import librosa
+from functools import lru_cache
 from typing import Dict, List, Tuple
+
+import librosa
+import numpy as np
 import torch
+
+from df import config as df_config
+from df.enhance import enhance, init_df
+from df.io import resample
 
 from ..config.settings import settings
 
@@ -71,78 +78,129 @@ def remove_long_silences_silero(audio: np.ndarray, sample_rate: int) -> np.ndarr
         logger.error(f"Silero VAD failed: {e}")
         return audio
 
+@lru_cache(maxsize=1)
+def _init_deepfilternet():
+    """Initialise DeepFilterNet (df) model/state once."""
+    logger.info("Initialising DeepFilterNet model")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("DeepFilterNet device: %s", device)
 
-def apply_denoising(audio: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, Dict]:
-    """Apply DeepFilterNet denoising (CPU default)"""
+    model, df_state, _ = init_df(config_allow_defaults=True)
+    model = model.to(device=device).eval()
+
+    return model, df_state, device
+
+
+def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, Dict]:
+    """Denoise audio using the modern DeepFilterNet (df) API with chunking."""
+
     try:
-        from deepfilternet import dfnet
-        
-        logger.info("Applying DeepFilterNet denoising (CPU)...")
-        
-        # Convert to torch tensor
-        audio_tensor = torch.from_numpy(audio).float()
-        
-        # Initialize DeepFilterNet model
-        model = dfnet.DFNet()
-        model.eval()
-        
-        # Process audio
+        model, df_state, device = _init_deepfilternet()
+    except Exception as exc:
+        logger.warning("DeepFilterNet initialisation failed: %s", exc)
+        return audio, {"applied": False, "reason": str(exc)}
+
+    logger.info("Applying DeepFilterNet denoising")
+    target_sr = settings.denoising_sample_rate
+
+    audio_tensor = torch.from_numpy(audio).float()
+
+    if sample_rate != target_sr:
+        logger.info("Resampling %d Hz -> %d Hz", sample_rate, target_sr)
+        audio_tensor = resample(audio_tensor.unsqueeze(0), sample_rate, target_sr).squeeze(0)
+        sr = target_sr
+    else:
+        sr = sample_rate
+
+    audio_tensor = audio_tensor.unsqueeze(0)
+
+    chunk_samples = int(settings.denoising_chunk_duration * sr)
+    overlap_samples = int(settings.denoising_overlap_duration * sr)
+
+    if audio_tensor.shape[-1] <= chunk_samples:
         with torch.no_grad():
-            denoised_audio = model(audio_tensor.unsqueeze(0)).squeeze(0).numpy()
-        
-        # Calculate metrics
-        original_rms = np.sqrt(np.mean(audio ** 2))
-        denoised_rms = np.sqrt(np.mean(denoised_audio ** 2))
-        snr_improvement = 20 * np.log10(denoised_rms / (original_rms + 1e-10))
-        
-        metrics = {
-            "applied": True,
-            "method": "DeepFilterNet",
-            "device": "cpu",
-            "snr_improvement_db": snr_improvement
-        }
-        
-        logger.info(f"Denoising completed: SNR improvement: {snr_improvement:.2f} dB")
-        return denoised_audio, metrics
-        
-    except ImportError:
-        logger.warning("DeepFilterNet not available")
-        return audio, {"applied": False, "reason": "DeepFilterNet not available"}
-    except Exception as e:
-        logger.error(f"Denoising failed: {e}")
-        return audio, {"applied": False, "error": str(e)}
+            enhanced = enhance(model, df_state, audio_tensor.to(device=device)).cpu()
+    else:
+        logger.info(
+            "Processing in %.1fs chunks with %.1fs overlap",
+            settings.denoising_chunk_duration,
+            settings.denoising_overlap_duration,
+        )
+
+        enhanced_chunks: List[torch.Tensor] = []
+        num_samples = audio_tensor.shape[-1]
+        step_samples = chunk_samples - overlap_samples
+        num_chunks = int(np.ceil((num_samples - overlap_samples) / step_samples))
+
+        for idx in range(num_chunks):
+            start_idx = idx * step_samples
+            end_idx = min(start_idx + chunk_samples, num_samples)
+
+            chunk = audio_tensor[..., start_idx:end_idx]
+
+            with torch.no_grad():
+                enhanced_chunk = enhance(model, df_state, chunk.to(device=device)).cpu()
+
+            if idx == 0:
+                enhanced_chunks.append(enhanced_chunk)
+            else:
+                enhanced_chunks.append(enhanced_chunk[..., overlap_samples:])
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+        enhanced = torch.cat(enhanced_chunks, dim=-1)
+        enhanced = enhanced[..., :num_samples]
+
+    enhanced_audio = enhanced.squeeze(0).numpy()
+
+    if sample_rate != sr:
+        logger.info("Resampling denoised audio back to %d Hz", sample_rate)
+        enhanced_audio = librosa.resample(enhanced_audio, orig_sr=sr, target_sr=sample_rate)
+
+    original_rms = float(np.sqrt(np.mean(audio ** 2)))
+    denoised_rms = float(np.sqrt(np.mean(enhanced_audio ** 2)))
+    snr_improvement = 20 * np.log10((denoised_rms + 1e-10) / (original_rms + 1e-10))
+
+    metrics = {
+        "applied": True,
+        "method": "DeepFilterNet",
+        "device": str(device),
+        "snr_improvement_db": snr_improvement,
+    }
+
+    logger.info("DeepFilterNet denoising complete (ΔSNR %.2f dB)", snr_improvement)
+    return enhanced_audio, metrics
 
 
 def preprocess_audio(file_path: str, enable_denoising: bool = True) -> Dict:
-    """Preprocess audio file with denoising and silence removal"""
-    logger.info(f"Preprocessing audio: {file_path}")
-    
+    """Preprocess audio file with denoising followed by optional VAD."""
+    logger.info("Preprocessing audio: %s", file_path)
+
     try:
-        # Load audio
-        audio, sample_rate = librosa.load(file_path, sr=None)
-        logger.info(f"Loaded audio: {len(audio)/sample_rate:.2f}s at {sample_rate}Hz")
-        
-        # Apply denoising if enabled
-        if enable_denoising:
-            audio, denoising_metrics = apply_denoising(audio, sample_rate)
+        audio, sample_rate = librosa.load(file_path, sr=None, mono=True)
+        logger.info("Loaded audio: %.2fs at %d Hz", len(audio) / sample_rate, sample_rate)
+
+        if enable_denoising and settings.denoising_enabled:
+            audio, denoising_metrics = denoise_with_deepfilternet(audio, sample_rate)
         else:
             denoising_metrics = {"applied": False, "reason": "Disabled"}
-        
-        # Remove long silences using Silero VAD
-        if settings.remove_long_silences:
+
+        if settings.remove_long_silences and settings.vad_enabled:
             audio = remove_long_silences_silero(audio, sample_rate)
             silence_removal_metrics = {"applied": True, "method": "Silero VAD"}
         else:
             silence_removal_metrics = {"applied": False, "reason": "Disabled"}
-        
+
         return {
             "audio": audio,
             "sample_rate": sample_rate,
             "duration": len(audio) / sample_rate,
             "denoising_metrics": denoising_metrics,
-            "silence_removal_metrics": silence_removal_metrics
+            "silence_removal_metrics": silence_removal_metrics,
         }
-        
-    except Exception as e:
-        logger.error(f"Failed to preprocess audio {file_path}: {e}")
+
+    except Exception as exc:
+        logger.error("Failed to preprocess audio %s: %s", file_path, exc)
         raise

@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     label_studio_url: str = Field("http://localhost:8080", env="LABEL_STUDIO_URL")
     label_studio_api_key: Optional[str] = Field(None, env="LABEL_STUDIO_API_KEY")
     
+    # Denoising Configuration
+    denoising_enabled: bool = Field(True, env="DENOISING_ENABLED")
+    denoising_chunk_duration: float = Field(30.0, env="DENOISING_CHUNK_DURATION")
+    denoising_overlap_duration: float = Field(2.0, env="DENOISING_OVERLAP_DURATION")
+    denoising_sample_rate: int = Field(48000, env="DENOISING_SAMPLE_RATE")
+    
     # Voice Activity Detection Configuration
     vad_enabled: bool = Field(True, env="VAD_ENABLED")
     vad_method: str = Field("silero", env="VAD_METHOD")
