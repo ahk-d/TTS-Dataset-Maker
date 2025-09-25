@@ -107,7 +107,15 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
 
     if sample_rate != target_sr:
         logger.info("Resampling %d Hz -> %d Hz", sample_rate, target_sr)
-        audio_tensor = resample(audio_tensor.unsqueeze(0), sample_rate, target_sr).squeeze(0)
+        try:
+            # Try df.io.resample first
+            audio_tensor = resample(audio_tensor.unsqueeze(0), sample_rate, target_sr).squeeze(0).detach().cpu()
+        except Exception as e:
+            logger.warning("df.io.resample failed, falling back to librosa: %s", e)
+            # Fallback to librosa resampling
+            audio_np = audio_tensor.detach().cpu().numpy()
+            audio_np = librosa.resample(audio_np, orig_sr=sample_rate, target_sr=target_sr)
+            audio_tensor = torch.from_numpy(audio_np).float()
         sr = target_sr
     else:
         sr = sample_rate
@@ -153,6 +161,7 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
         enhanced = torch.cat(enhanced_chunks, dim=-1).detach().cpu()
         enhanced = enhanced[..., :num_samples]
 
+    logger.debug("Enhanced tensor device: %s, requires_grad: %s", enhanced.device, enhanced.requires_grad)
     enhanced_audio = enhanced.squeeze(0).numpy()
 
     if sample_rate != sr:
