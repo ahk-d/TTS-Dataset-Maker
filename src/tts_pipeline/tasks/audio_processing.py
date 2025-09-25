@@ -119,7 +119,7 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
 
     if audio_tensor.shape[-1] <= chunk_samples:
         with torch.no_grad():
-            enhanced = enhance(model, df_state, audio_tensor.to(device=device)).cpu()
+            enhanced = enhance(model, df_state, audio_tensor.to(device=device)).detach().cpu()
     else:
         logger.info(
             "Processing in %.1fs chunks with %.1fs overlap",
@@ -139,7 +139,7 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
             chunk = audio_tensor[..., start_idx:end_idx]
 
             with torch.no_grad():
-                enhanced_chunk = enhance(model, df_state, chunk.to(device=device)).cpu()
+                enhanced_chunk = enhance(model, df_state, chunk.to(device=device)).detach().cpu()
 
             if idx == 0:
                 enhanced_chunks.append(enhanced_chunk)
@@ -150,10 +150,10 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
                 torch.cuda.empty_cache()
             gc.collect()
 
-        enhanced = torch.cat(enhanced_chunks, dim=-1).cpu()
+        enhanced = torch.cat(enhanced_chunks, dim=-1).detach().cpu()
         enhanced = enhanced[..., :num_samples]
 
-    enhanced_audio = enhanced.squeeze(0).detach().cpu().numpy()
+    enhanced_audio = enhanced.squeeze(0).numpy()
 
     if sample_rate != sr:
         logger.info("Resampling denoised audio back to %d Hz", sample_rate)
