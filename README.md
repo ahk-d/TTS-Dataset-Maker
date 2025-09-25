@@ -14,6 +14,8 @@ Simple local TTS dataset creation pipeline with Silero VAD-based silence removal
 
 ### 1. Install Dependencies
 
+#### Local development (uv recommended)
+
 ```bash
 # Install uv if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -22,10 +24,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
-**For Google Colab:**
+#### Google Colab / plain Python environments
+
 ```python
-# Install dependencies directly with uv
-!uv pip install pydantic pydantic-settings assemblyai librosa soundfile numpy python-dotenv label-studio-sdk torch torchaudio silero-vad deepfilternet pydub
+# Option A: use uv for dependency management
+!pip install uv
+!uv pip install -r requirements.txt
+
+# Option B: plain pip (if you prefer)
+!pip install -r requirements.txt
 ```
 
 ### 2. Set Up Environment
@@ -57,15 +64,23 @@ label-studio start
 
 # Basic processing (with VAD and silence removal)
 uv run python scripts/process.py configs/dataset_config.json
+# or
+python scripts/process.py configs/dataset_config.json
 
 # Process without VAD (keep all audio)
 VAD_ENABLED=false uv run python scripts/process.py configs/dataset_config.json
+# or
+VAD_ENABLED=false python scripts/process.py configs/dataset_config.json
 
 # Process without silence removal
 REMOVE_LONG_SILENCES=false uv run python scripts/process.py configs/dataset_config.json
+# or
+REMOVE_LONG_SILENCES=false python scripts/process.py configs/dataset_config.json
 
 # Process with custom settings
 MIN_SEGMENT_DURATION=2.0 MAX_SILENCE_DURATION=0.5 uv run python scripts/process.py configs/dataset_config.json
+# or
+MIN_SEGMENT_DURATION=2.0 MAX_SILENCE_DURATION=0.5 python scripts/process.py configs/dataset_config.json
 ```
 
 ## Configuration
