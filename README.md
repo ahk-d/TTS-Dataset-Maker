@@ -22,6 +22,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
+**For Google Colab:**
+```python
+# Install dependencies directly with uv
+!uv pip install pydantic pydantic-settings assemblyai librosa soundfile numpy python-dotenv label-studio-sdk torch torchaudio silero-vad deepfilternet pydub
+```
+
 ### 2. Set Up Environment
 
 ```bash
@@ -46,16 +52,29 @@ label-studio start
 ### 4. Process Your Dataset
 
 ```bash
-# Process a single file
-python local_processor.py configs/dataset_config.json
+# Create your config file first
+# Look at configs/example_config.md and create configs/dataset_config.json
 
-# Or use the simple script
-python scripts/process.py configs/dataset_config.json
+# Basic processing (with VAD and silence removal)
+uv run python scripts/process.py configs/dataset_config.json
+
+# Process without VAD (keep all audio)
+VAD_ENABLED=false uv run python scripts/process.py configs/dataset_config.json
+
+# Process without silence removal
+REMOVE_LONG_SILENCES=false uv run python scripts/process.py configs/dataset_config.json
+
+# Process with custom settings
+MIN_SEGMENT_DURATION=2.0 MAX_SILENCE_DURATION=0.5 uv run python scripts/process.py configs/dataset_config.json
 ```
 
 ## Configuration
 
-Edit `configs/dataset_config.json`:
+Create your config file:
+
+1. **Look at the example**: Open `configs/example_config.md` to see the JSON structure
+2. **Create your config**: Create a new file `configs/dataset_config.json` with your settings
+3. **Edit the paths**: Update the `sources` array with your audio file paths
 
 ```json
 {
@@ -69,20 +88,32 @@ Edit `configs/dataset_config.json`:
 
 ## Environment Variables
 
+### Required
 - `ASSEMBLYAI_API_KEY` - Your AssemblyAI API key (required)
+
+### Optional
 - `LABEL_STUDIO_URL` - Label Studio URL (default: http://localhost:8080)
 - `LABEL_STUDIO_API_KEY` - Label Studio API key (optional)
-- `VAD_ENABLED` - Enable VAD (default: true)
-- `VAD_METHOD` - VAD method (default: silero)
+
+### Audio Processing Settings
+- `VAD_ENABLED` - Enable Voice Activity Detection (default: true)
+- `VAD_METHOD` - VAD method: silero, webrtc (default: silero)
 - `REMOVE_LONG_SILENCES` - Remove long silences (default: true)
 - `MAX_SILENCE_DURATION` - Max silence duration to keep (default: 1.0s)
+- `SILENCE_THRESHOLD` - Silence detection threshold in dB (default: -30.0)
+- `MIN_SPEECH_DURATION` - Minimum speech segment duration (default: 0.5s)
+- `MIN_SPEECH_RATIO` - Minimum speech ratio in segment (default: 0.3)
+
+### Quality Control Settings
+- `MIN_SEGMENT_DURATION` - Minimum segment duration (default: 1.0s)
+- `MAX_SEGMENT_DURATION` - Maximum segment duration (default: 3600.0s)
+- `MIN_CONFIDENCE_SCORE` - Minimum transcription confidence (default: 0.7)
 
 ## Output
 
 Processed datasets are saved to `output/`:
 - `audio_segments/` - Individual audio segments
 - `exports/` - Hugging Face format datasets
-- `label_studio.sqlite3` - Local database
 
 ## Dependencies
 
