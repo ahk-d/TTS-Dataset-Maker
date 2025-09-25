@@ -150,10 +150,10 @@ def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.
                 torch.cuda.empty_cache()
             gc.collect()
 
-        enhanced = torch.cat(enhanced_chunks, dim=-1)
+        enhanced = torch.cat(enhanced_chunks, dim=-1).cpu()
         enhanced = enhanced[..., :num_samples]
 
-    enhanced_audio = enhanced.squeeze(0).numpy()
+    enhanced_audio = enhanced.squeeze(0).detach().cpu().numpy()
 
     if sample_rate != sr:
         logger.info("Resampling denoised audio back to %d Hz", sample_rate)
