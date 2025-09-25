@@ -8,6 +8,7 @@ import sys
 import json
 import time
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any
 import librosa
@@ -281,6 +282,17 @@ TTS Dataset created with local processing pipeline.
         
         with open(export_dir / "README.md", "w") as f:
             f.write(readme_content)
+        
+        # Copy audio files into export/audio directory
+        segments_source_dir = self.output_dir / "audio_segments"
+        for segment in segments:
+            source_audio_path = segments_source_dir / Path(segment["audio_file"]).name
+            target_audio_path = audio_dir / Path(segment["audio_file"]).name
+
+            if source_audio_path.exists():
+                shutil.copy2(source_audio_path, target_audio_path)
+            else:
+                logger.warning(f"Missing audio file for export: {source_audio_path}")
         
         logger.info(f"Dataset exported to: {export_dir}")
         return str(export_dir)
