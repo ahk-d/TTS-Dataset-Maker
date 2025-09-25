@@ -93,94 +93,115 @@ def _init_deepfilternet():
 
 def denoise_with_deepfilternet(audio: np.ndarray, sample_rate: int) -> Tuple[np.ndarray, Dict]:
     """Denoise audio using the modern DeepFilterNet (df) API with chunking."""
+    
+    # Temporary emergency bypass for CUDA issues
+    import os
+    if os.environ.get("DISABLE_DEEPFILTERNET", "false").lower() == "true":
+        logger.warning("DeepFilterNet disabled via DISABLE_DEEPFILTERNET environment variable")
+        return audio, {"applied": False, "reason": "Disabled via environment variable"}
 
     try:
         model, df_state, device = _init_deepfilternet()
     except Exception as exc:
         logger.warning("DeepFilterNet initialisation failed: %s", exc)
         return audio, {"applied": False, "reason": str(exc)}
+    
+    logger.info("Starting DeepFilterNet denoising process")
 
-    logger.info("Applying DeepFilterNet denoising")
-    target_sr = settings.denoising_sample_rate
+    try:
+        logger.info("Applying DeepFilterNet denoising")
+        target_sr = settings.denoising_sample_rate
 
-    audio_tensor = torch.from_numpy(audio).float()
+        logger.debug("Step 1: Converting audio to tensor")
+        audio_tensor = torch.from_numpy(audio).float()
 
-    if sample_rate != target_sr:
-        logger.info("Resampling %d Hz -> %d Hz", sample_rate, target_sr)
-        try:
-            # Try df.io.resample first
-            audio_tensor = resample(audio_tensor.unsqueeze(0), sample_rate, target_sr).squeeze(0).detach().cpu()
-        except Exception as e:
-            logger.warning("df.io.resample failed, falling back to librosa: %s", e)
-            # Fallback to librosa resampling
-            audio_np = audio_tensor.detach().cpu().numpy()
-            audio_np = librosa.resample(audio_np, orig_sr=sample_rate, target_sr=target_sr)
-            audio_tensor = torch.from_numpy(audio_np).float()
-        sr = target_sr
-    else:
-        sr = sample_rate
+        if sample_rate != target_sr:
+            logger.info("Resampling %d Hz -> %d Hz", sample_rate, target_sr)
+            try:
+                logger.debug("Step 2a: Using df.io.resample")
+                # Try df.io.resample first
+                audio_tensor = resample(audio_tensor.unsqueeze(0), sample_rate, target_sr).squeeze(0).detach().cpu()
+            except Exception as e:
+                logger.warning("df.io.resample failed, falling back to librosa: %s", e)
+                logger.debug("Step 2b: Using librosa fallback")
+                # Fallback to librosa resampling
+                audio_np = audio_tensor.detach().cpu().numpy()
+                audio_np = librosa.resample(audio_np, orig_sr=sample_rate, target_sr=target_sr)
+                audio_tensor = torch.from_numpy(audio_np).float()
+            sr = target_sr
+        else:
+            sr = sample_rate
 
-    audio_tensor = audio_tensor.unsqueeze(0)
+        logger.debug("Step 3: Adding batch dimension")
+        audio_tensor = audio_tensor.unsqueeze(0)
 
-    chunk_samples = int(settings.denoising_chunk_duration * sr)
-    overlap_samples = int(settings.denoising_overlap_duration * sr)
+        chunk_samples = int(settings.denoising_chunk_duration * sr)
+        overlap_samples = int(settings.denoising_overlap_duration * sr)
 
-    if audio_tensor.shape[-1] <= chunk_samples:
-        with torch.no_grad():
-            enhanced = enhance(model, df_state, audio_tensor.to(device=device)).detach().cpu()
-    else:
-        logger.info(
-            "Processing in %.1fs chunks with %.1fs overlap",
-            settings.denoising_chunk_duration,
-            settings.denoising_overlap_duration,
-        )
-
-        enhanced_chunks: List[torch.Tensor] = []
-        num_samples = audio_tensor.shape[-1]
-        step_samples = chunk_samples - overlap_samples
-        num_chunks = int(np.ceil((num_samples - overlap_samples) / step_samples))
-
-        for idx in range(num_chunks):
-            start_idx = idx * step_samples
-            end_idx = min(start_idx + chunk_samples, num_samples)
-
-            chunk = audio_tensor[..., start_idx:end_idx]
-
+        if audio_tensor.shape[-1] <= chunk_samples:
+            logger.debug("Step 4a: Processing short audio (single chunk)")
             with torch.no_grad():
-                enhanced_chunk = enhance(model, df_state, chunk.to(device=device)).detach().cpu()
+                enhanced = enhance(model, df_state, audio_tensor.to(device=device)).detach().cpu()
+        else:
+            logger.info(
+                "Processing in %.1fs chunks with %.1fs overlap",
+                settings.denoising_chunk_duration,
+                settings.denoising_overlap_duration,
+            )
+            logger.debug("Step 4b: Processing long audio (chunked)")
 
-            if idx == 0:
-                enhanced_chunks.append(enhanced_chunk)
-            else:
-                enhanced_chunks.append(enhanced_chunk[..., overlap_samples:])
+            enhanced_chunks: List[torch.Tensor] = []
+            num_samples = audio_tensor.shape[-1]
+            step_samples = chunk_samples - overlap_samples
+            num_chunks = int(np.ceil((num_samples - overlap_samples) / step_samples))
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()
+            for idx in range(num_chunks):
+                logger.debug("Processing chunk %d/%d", idx + 1, num_chunks)
+                start_idx = idx * step_samples
+                end_idx = min(start_idx + chunk_samples, num_samples)
 
-        enhanced = torch.cat(enhanced_chunks, dim=-1).detach().cpu()
-        enhanced = enhanced[..., :num_samples]
+                chunk = audio_tensor[..., start_idx:end_idx]
 
-    logger.debug("Enhanced tensor device: %s, requires_grad: %s", enhanced.device, enhanced.requires_grad)
-    enhanced_audio = enhanced.squeeze(0).numpy()
+                with torch.no_grad():
+                    enhanced_chunk = enhance(model, df_state, chunk.to(device=device)).detach().cpu()
 
-    if sample_rate != sr:
-        logger.info("Resampling denoised audio back to %d Hz", sample_rate)
-        enhanced_audio = librosa.resample(enhanced_audio, orig_sr=sr, target_sr=sample_rate)
+                if idx == 0:
+                    enhanced_chunks.append(enhanced_chunk)
+                else:
+                    enhanced_chunks.append(enhanced_chunk[..., overlap_samples:])
 
-    original_rms = float(np.sqrt(np.mean(audio ** 2)))
-    denoised_rms = float(np.sqrt(np.mean(enhanced_audio ** 2)))
-    snr_improvement = 20 * np.log10((denoised_rms + 1e-10) / (original_rms + 1e-10))
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
 
-    metrics = {
-        "applied": True,
-        "method": "DeepFilterNet",
-        "device": str(device),
-        "snr_improvement_db": snr_improvement,
-    }
+            logger.debug("Step 5: Concatenating chunks")
+            enhanced = torch.cat(enhanced_chunks, dim=-1).detach().cpu()
+            enhanced = enhanced[..., :num_samples]
 
-    logger.info("DeepFilterNet denoising complete (ΔSNR %.2f dB)", snr_improvement)
-    return enhanced_audio, metrics
+        logger.debug("Step 6: Converting to numpy - Enhanced tensor device: %s, requires_grad: %s", enhanced.device, enhanced.requires_grad)
+        enhanced_audio = enhanced.squeeze(0).numpy()
+
+        if sample_rate != sr:
+            logger.info("Resampling denoised audio back to %d Hz", sample_rate)
+            enhanced_audio = librosa.resample(enhanced_audio, orig_sr=sr, target_sr=sample_rate)
+
+        original_rms = float(np.sqrt(np.mean(audio ** 2)))
+        denoised_rms = float(np.sqrt(np.mean(enhanced_audio ** 2)))
+        snr_improvement = 20 * np.log10((denoised_rms + 1e-10) / (original_rms + 1e-10))
+
+        metrics = {
+            "applied": True,
+            "method": "DeepFilterNet",
+            "device": str(device),
+            "snr_improvement_db": snr_improvement,
+        }
+
+        logger.info("DeepFilterNet denoising complete (ΔSNR %.2f dB)", snr_improvement)
+        return enhanced_audio, metrics
+        
+    except Exception as exc:
+        logger.error("DeepFilterNet processing failed at some step: %s", exc, exc_info=True)
+        return audio, {"applied": False, "reason": f"Processing failed: {exc}"}
 
 
 def preprocess_audio(file_path: str, enable_denoising: bool = True) -> Dict:
