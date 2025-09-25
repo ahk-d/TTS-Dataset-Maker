@@ -1,0 +1,42 @@
+<View>
+  <Audio name="audio" value="http://localhost:8000/$audio_file"/>
+  
+  <!-- Segment Information -->
+  <View style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-radius: 8px;">
+    <Text name="segment_info" value="Segment ID: $segment_id | Speaker: $speaker_id | Duration: $duration s"/>
+    <Text name="confidence_info" value="Confidence: $confidence_score | Quality: $quality_score"/>
+  </View>
+  
+  <!-- Original Transcription -->
+  <View style="background: #e3f2fd; padding: 12px; margin: 8px 0; border-radius: 8px;">
+    <Text name="transcription_label" value="Original Transcription:" style="font-weight: bold; margin-bottom: 8px;"/>
+    <Text name="transcription_text" value="$text" style="font-size: 16px; line-height: 1.5;"/>
+  </View>
+  
+  <!-- Quality Assessment -->
+  <View style="margin: 16px 0;">
+    <Text name="quality_label" value="Quality Assessment" style="font-weight: bold; font-size: 14px; margin-bottom: 8px;"/>
+    <Choices name="quality" toName="audio" choice="single-radio" showInline="true">
+      <Choice value="good"/>
+      <Choice value="needs_correction"/>
+      <Choice value="exclude"/>
+    </Choices>
+  </View>
+  
+  <!-- Corrected Text -->
+  <View style="margin: 12px 0;">
+    <Text name="corrected_label" value="Corrected Text (if needed)" style="font-weight: bold; font-size: 14px; margin-bottom: 8px;"/>
+    <TextArea name="corrected_text" toName="audio" 
+              placeholder="Enter corrected text here if transcription needs fixing..."
+              style="width: 100%; min-height: 60px;"/>
+  </View>
+  
+  <!-- Additional Notes -->
+  <View style="margin: 12px 0;">
+    <Text name="notes_label" value="Additional Notes" style="font-weight: bold; font-size: 14px; margin-bottom: 8px;"/>
+    <TextArea name="notes" toName="audio" 
+              placeholder="Any additional notes about this segment..."
+              style="width: 100%; min-height: 40px;"/>
+  </View>
+  
+</View>

@@ -1,3 +1,6 @@
+# Output directory
+output/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -22,10 +25,13 @@ wheels/
 MANIFEST
 
 # Virtual environments
-venv/
+.env
+.venv
 env/
+venv/
 ENV/
-.venv/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
@@ -36,20 +42,27 @@ ENV/
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
-
-# Project specific
-output/
-*.wav
-*.mp3
-*.mp4
-*.json
-!requirements.txt
-!README.md
 
 # Logs
 *.log
+logs/
 
 # Temporary files
 *.tmp
-*.temp 
+*.temp
+temp/
+tmp/
+
+# Label Studio import files
+label_studio_import.json
+*_label_studio_config.xml
+
+# Config files (keep examples only)
+configs/*.json
+!configs/example_config.md

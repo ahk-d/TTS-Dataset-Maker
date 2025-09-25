@@ -1,48 +1,75 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+Simple setup script for TTS Dataset Maker
+"""
+import subprocess
+import sys
+from pathlib import Path
 
-from setuptools import setup, find_packages
+def install_dependencies():
+    """Install required dependencies"""
+    print("Installing dependencies...")
+    
+    try:
+        # Try uv first
+        subprocess.run(["uv", "sync"], check=True)
+        print("✅ Dependencies installed with uv")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Fallback to pip
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+            print("✅ Dependencies installed with pip")
+            return True
+        except subprocess.CalledProcessError:
+            print("❌ Failed to install dependencies")
+            return False
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+def create_env_file():
+    """Create .env file from template"""
+    env_file = Path(".env")
+    env_example = Path("env.example")
+    
+    if not env_file.exists() and env_example.exists():
+        env_file.write_text(env_example.read_text())
+        print("✅ Created .env file from template")
+        print("⚠️  Please edit .env file and add your AssemblyAI API key")
+        return True
+    elif env_file.exists():
+        print("✅ .env file already exists")
+        return True
+    else:
+        print("❌ No env.example file found")
+        return False
 
-with open("requirements.txt", "r", encoding="utf-8") as fh:
-    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+def create_directories():
+    """Create necessary directories"""
+    directories = ["output", "output/exports", "configs"]
+    
+    for directory in directories:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created directory: {directory}")
+    
+    return True
 
-setup(
-    name="tts-dataset-maker",
-    version="1.0.0",
-    author="TTS Dataset Maker",
-    description="A modular tool for creating and exploring TTS datasets from YouTube videos using AssemblyAI",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/tts-dataset-maker",
-    packages=find_packages(),
-    classifiers=[
-        "Development Status :: 4 - Beta",
-        "Intended Audience :: Developers",
-        "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Topic :: Multimedia :: Sound/Audio",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    ],
-    python_requires=">=3.7",
-    install_requires=requirements,
-    entry_points={
-        "console_scripts": [
-            "tts-dataset-maker=main:main",
-        ],
-    },
-    keywords="tts, text-to-speech, dataset, youtube, assemblyai, audio, transcription",
-    project_urls={
-        "Bug Reports": "https://github.com/yourusername/tts-dataset-maker/issues",
-        "Source": "https://github.com/yourusername/tts-dataset-maker",
-    },
-) 
+def main():
+    """Main setup function"""
+    print("🚀 Setting up TTS Dataset Maker...")
+    
+    success = True
+    success &= install_dependencies()
+    success &= create_env_file()
+    success &= create_directories()
+    
+    if success:
+        print("\n🎉 Setup complete!")
+        print("\nNext steps:")
+        print("1. Edit .env file and add your AssemblyAI API key")
+        print("2. Create a config file in configs/")
+        print("3. Run: python local_processor.py configs/your_config.json")
+    else:
+        print("\n❌ Setup failed. Please check the errors above.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
