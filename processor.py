@@ -161,27 +161,41 @@ class Processor:
         }
     
     def load_existing_transcript(self, transcript_path: str) -> Dict:
-        """Load existing transcript from JSON file"""
+        """Load existing transcript from JSON file (seconds or milliseconds supported)."""
         logger.info(f"Loading existing transcript: {transcript_path}")
         
         with open(transcript_path, 'r') as f:
             transcript_data = json.load(f)
         
-        # Convert to AssemblyAI-like format
+        # Detect unit: if values look large (e.g., > 100000), assume milliseconds; otherwise seconds
+        utterances_in = transcript_data.get('utterances', []) or []
+        if utterances_in:
+            first = utterances_in[0]
+            start_val = float(first.get('start', 0))
+            end_val = float(first.get('end', 0))
+            is_ms = (start_val >= 1e4) or (end_val >= 1e4)  # >= 10 seconds in ms
+        else:
+            is_ms = True
+        
+        # Convert to AssemblyAI-like format with start/end in milliseconds
         class MockUtterance:
             def __init__(self, text, speaker, start, end, confidence=None):
                 self.text = text
                 self.speaker = speaker
-                self.start = start * 1000  # Convert seconds to ms
-                self.end = end * 1000
+                if is_ms:
+                    self.start = int(round(float(start)))
+                    self.end = int(round(float(end)))
+                else:
+                    self.start = int(round(float(start) * 1000.0))
+                    self.end = int(round(float(end) * 1000.0))
                 self.confidence = confidence or 0.9
         
         class MockTranscript:
             def __init__(self, utterances_data):
                 self.utterances = [MockUtterance(**utt) for utt in utterances_data]
         
-        transcript = MockTranscript(transcript_data.get('utterances', []))
-        logger.info(f"Loaded transcript: {len(transcript.utterances)} utterances")
+        transcript = MockTranscript(utterances_in)
+        logger.info(f"Loaded transcript: {len(transcript.utterances)} utterances (units={'ms' if is_ms else 's'})")
         return transcript
     
     def transcribe_audio(self, audio_file: str, transcript_path: str = None) -> Dict:
