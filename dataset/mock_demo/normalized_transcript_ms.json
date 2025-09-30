@@ -1,0 +1,22 @@
+{
+  "utterances": [
+    {
+      "start_ms": 2880.0,
+      "end_ms": 6400.0,
+      "text": "a",
+      "speaker": "A"
+    },
+    {
+      "start_ms": 6560.0,
+      "end_ms": 8720.0,
+      "text": "b",
+      "speaker": "B"
+    },
+    {
+      "start_ms": 9040.0,
+      "end_ms": 9680.0,
+      "text": "c",
+      "speaker": "C"
+    }
+  ]
+}

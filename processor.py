@@ -14,6 +14,7 @@ from typing import List, Dict, Any
 import librosa
 import soundfile as sf
 import numpy as np
+from pydub import AudioSegment
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -161,33 +162,50 @@ class Processor:
         }
     
     def load_existing_transcript(self, transcript_path: str) -> Dict:
-        """Load existing transcript from JSON file (seconds or milliseconds supported)."""
+        """Load existing transcript from JSON file (supports microseconds, milliseconds, or seconds)."""
         logger.info(f"Loading existing transcript: {transcript_path}")
         
         with open(transcript_path, 'r') as f:
             transcript_data = json.load(f)
         
-        # Detect unit: if values look large (e.g., > 100000), assume milliseconds; otherwise seconds
+        # Detect unit: microseconds, milliseconds, or seconds
         utterances_in = transcript_data.get('utterances', []) or []
         if utterances_in:
             first = utterances_in[0]
             start_val = float(first.get('start', 0))
             end_val = float(first.get('end', 0))
-            is_ms = (start_val >= 1e4) or (end_val >= 1e4)  # >= 10 seconds in ms
+            
+            # Check max value to determine unit
+            max_val = max(start_val, end_val)
+            if max_val >= 1e6:  # >= 1000 seconds in microseconds
+                unit = 'us'
+                logger.info("Detected microsecond timestamps")
+            elif max_val >= 1e4:  # >= 10 seconds in milliseconds
+                unit = 'ms'
+                logger.info("Detected millisecond timestamps")
+            else:
+                unit = 's'
+                logger.info("Detected second timestamps")
         else:
-            is_ms = True
+            unit = 'ms'
         
         # Convert to AssemblyAI-like format with start/end in milliseconds
         class MockUtterance:
             def __init__(self, text, speaker, start, end, confidence=None):
                 self.text = text
                 self.speaker = speaker
-                if is_ms:
+                
+                # Convert to milliseconds (AssemblyAI standard)
+                if unit == 'us':
+                    self.start = int(round(float(start) / 1000.0))
+                    self.end = int(round(float(end) / 1000.0))
+                elif unit == 'ms':
                     self.start = int(round(float(start)))
                     self.end = int(round(float(end)))
-                else:
+                else:  # seconds
                     self.start = int(round(float(start) * 1000.0))
                     self.end = int(round(float(end) * 1000.0))
+                
                 self.confidence = confidence or 0.9
         
         class MockTranscript:
@@ -195,7 +213,7 @@ class Processor:
                 self.utterances = [MockUtterance(**utt) for utt in utterances_data]
         
         transcript = MockTranscript(utterances_in)
-        logger.info(f"Loaded transcript: {len(transcript.utterances)} utterances (units={'ms' if is_ms else 's'})")
+        logger.info(f"Loaded transcript: {len(transcript.utterances)} utterances (normalized to milliseconds)")
         return transcript
     
     def transcribe_audio(self, audio_file: str, transcript_path: str = None) -> Dict:
@@ -220,9 +238,34 @@ class Processor:
         
         segments = []
         utterances = transcript.utterances
-        # Use the processed audio (denoised if available, otherwise raw)
-        audio = audio_data["audio"]
         sample_rate = audio_data["sample_rate"]
+
+        # Build a pydub AudioSegment as the source (prefer denoised if available)
+        if audio_data.get("audio") is None:
+            raise ValueError("Missing audio in audio_data")
+
+        if audio_data.get("audio") is not None and audio_data.get("audio_denoised") is not None:
+            # Use denoised waveform
+            src_float = audio_data["audio_denoised"]
+        else:
+            src_float = audio_data["audio"]
+
+        # Convert float32 [-1,1] -> int16 bytes for pydub
+        src_int16 = np.clip(src_float, -1.0, 1.0)
+        src_int16 = (src_int16 * 32767.0).astype(np.int16)
+        source_segment = AudioSegment(
+            src_int16.tobytes(),
+            frame_rate=sample_rate,
+            sample_width=2,
+            channels=1,
+        )
+
+        audio_duration_ms = len(source_segment)
+        
+        # Timestamps are already normalized to milliseconds by load_existing_transcript
+        # or come from AssemblyAI in milliseconds
+        logger.info(f"Using millisecond timestamps (audio duration: {audio_duration_ms}ms)")
+        
         source_stem = Path(source_file).stem if source_file else "source"
         
         # Target directory for segment files (default to dataset/audio)
@@ -230,34 +273,42 @@ class Processor:
         segments_dir.mkdir(parents=True, exist_ok=True)
         
         for i, utterance in enumerate(utterances):
-            # Extract audio segment with exact sample counts (ms -> samples), guard bounds
-            start_sample = max(0, int(round(utterance.start * sample_rate / 1000.0)))
-            end_sample = max(start_sample, int(round(utterance.end * sample_rate / 1000.0)))
-            end_sample = min(len(audio), end_sample)
-            num_samples = end_sample - start_sample
-            if num_samples <= 0:
-                logger.warning(f"Skipping zero-length segment at index {i}: start={start_sample}, end={end_sample}")
+            # Timestamps are already in milliseconds
+            start_ms = float(utterance.start)
+            end_ms = float(utterance.end)
+
+            # Clamp to valid range
+            start_ms = max(0.0, min(start_ms, float(audio_duration_ms)))
+            end_ms = max(0.0, min(end_ms, float(audio_duration_ms)))
+            
+            if end_ms <= start_ms:
+                logger.warning(f"Skipping invalid range at index {i}: start_ms={start_ms}, end_ms={end_ms}")
                 continue
-            segment_audio = audio[start_sample:end_sample].astype(np.float32, copy=False)
+                
+            seg = source_segment[int(round(start_ms)):int(round(end_ms))]
+            
+            if len(seg) <= 0:
+                logger.warning(f"Skipping zero-length segment at index {i}: start_ms={start_ms}, end_ms={end_ms}")
+                continue
             
             # Save audio file with source-aware, collision-proof name
             audio_filename = f"{source_stem}_segment_{i}.wav"
             audio_path = segments_dir / audio_filename
-            # Write WAV safely
-            sf.write(audio_path, segment_audio, sample_rate, subtype='PCM_16')
+            # Export using pydub to ensure proper WAV encoding
+            seg.export(audio_path, format="wav")
             
             # Create segment metadata
             segment = {
                 "segment_id": f"{source_stem}_segment_{i}",
                 "text": utterance.text,
                 "speaker_id": utterance.speaker,
-                "start_time": utterance.start / 1000.0,  # Convert ms to seconds
-                "end_time": utterance.end / 1000.0,
-                "duration": (end_sample - start_sample) / sample_rate,
+                "start_time": start_ms / 1000.0,  # Convert ms to seconds
+                "end_time": end_ms / 1000.0,      # Convert ms to seconds
+                "duration": len(seg) / 1000.0,    # pydub length is in ms
                 "confidence": utterance.confidence,
                 "audio_file": f"audio/{audio_filename}",
-                "source_file": source_file,  # Include original file path for tracing
-                "sample_rate": sample_rate  # Preserve original sample rate
+                "source_file": source_file,
+                "sample_rate": sample_rate
             }
             segments.append(segment)
         
@@ -305,9 +356,9 @@ class Processor:
                 "audio_file": segment["audio_file"],
                 "text": segment["text"],
                 "speaker_id": segment["speaker_id"],
-                "source_file": segment.get("source_file"),  # Include source file for tracing
+                "source_file": segment.get("source_file"),
                 "duration": segment["duration"],
-                "sample_rate": segment.get("sample_rate", 44100),  # Use actual sample rate
+                "sample_rate": segment.get("sample_rate", 44100),
                 "language": "en",
                 "quality_score": segment["confidence"],
                 "confidence_score": segment["confidence"],
@@ -408,8 +459,8 @@ TTS Dataset created with local processing pipeline.
                             "confidence": getattr(utt, 'confidence', None),
                         })
                     stem = Path(file_path).stem
-                    transcript_path = export_transcripts_dir / f"{stem}.json"
-                    with open(transcript_path, 'w') as tf:
+                    transcript_out_path = export_transcripts_dir / f"{stem}.json"
+                    with open(transcript_out_path, 'w') as tf:
                         json.dump({
                             "source_file": file_path,
                             "sample_rate": audio_data.get("sample_rate"),
@@ -431,8 +482,6 @@ TTS Dataset created with local processing pipeline.
                 valid_segments = self.validate_segments(segments)
                 
                 all_segments.extend(valid_segments)
-
-                # Append metadata (audio already written to dataset/audio)
 
                 # Append to export metadata.json atomically
                 try:
@@ -542,7 +591,7 @@ def main():
             raise ValueError("No local files to process")
         
         # Process dataset
-        processor = LocalTTSProcessor()
+        processor = Processor()
         result = processor.process_dataset(local_files, dataset_name)
         
         print(f"\n🎉 Processing Complete!")
