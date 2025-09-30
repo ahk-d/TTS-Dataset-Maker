@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from tts_pipeline.integrations.assemblyai import AssemblyAIClient
 from tts_pipeline.integrations.label_studio import LabelStudioManager
 from tts_pipeline.config.settings import settings
-from tts_pipeline.tasks.audio_processing import preprocess_audio
+from tts_pipeline.tasks.audio_processing import preprocess_audio, denoise_with_deepfilternet
 
 # Configure logging
 logging.basicConfig(
@@ -132,31 +132,63 @@ class Processor:
         """Process a single audio file"""
         logger.info(f"Processing: {file_path}")
         
-        # Optional: run denoising/metrics, but DO NOT remove silences here.
-        # We will segment against the ORIGINAL audio to match transcript timings.
-        try:
-            preprocessed = preprocess_audio(
-                file_path,
-                enable_denoising=settings.denoising_enabled,
-            )
-        except Exception as e:
-            logger.warning(f"Preprocess failed, continuing with raw audio: {e}")
-            preprocessed = {"denoising_metrics": {}, "silence_removal_metrics": {}}
-
-        # Always load original audio at native SR for precise timestamp alignment
+        # Load original audio at native SR for precise timestamp alignment
         audio, sample_rate = librosa.load(file_path, sr=None, mono=True)
         audio = librosa.util.normalize(audio)
 
+        # Apply denoising if enabled (but not silence removal to preserve timing)
+        audio_denoised = None
+        denoising_metrics = {}
+        try:
+            if settings.denoising_enabled and os.environ.get("DISABLE_DEEPFILTERNET", "false").lower() != "true":
+                denoised, denoising_metrics = denoise_with_deepfilternet(audio, sample_rate)
+                if isinstance(denoised, np.ndarray) and len(denoised) == len(audio):
+                    audio_denoised = denoised
+                    logger.info("Using denoised audio for segmentation")
+                else:
+                    logger.warning("Denoised audio length mismatch; using raw for segments")
+            else:
+                logger.info("Denoising disabled; using raw audio for segmentation")
+        except Exception as e:
+            logger.warning(f"Denoising failed; using raw audio for segments: {e}")
+
         return {
-            "audio": audio,
+            "audio": audio_denoised if audio_denoised is not None else audio,
             "sample_rate": sample_rate,
             "duration": len(audio) / sample_rate,
-            "denoising_metrics": preprocessed.get("denoising_metrics", {}),
-            "silence_removal_metrics": preprocessed.get("silence_removal_metrics", {}),
+            "denoising_metrics": denoising_metrics,
+            "silence_removal_metrics": {"applied": False, "reason": "Disabled for timing preservation"},
         }
     
-    def transcribe_audio(self, audio_file: str) -> Dict:
-        """Transcribe audio using AssemblyAI"""
+    def load_existing_transcript(self, transcript_path: str) -> Dict:
+        """Load existing transcript from JSON file"""
+        logger.info(f"Loading existing transcript: {transcript_path}")
+        
+        with open(transcript_path, 'r') as f:
+            transcript_data = json.load(f)
+        
+        # Convert to AssemblyAI-like format
+        class MockUtterance:
+            def __init__(self, text, speaker, start, end, confidence=None):
+                self.text = text
+                self.speaker = speaker
+                self.start = start * 1000  # Convert seconds to ms
+                self.end = end * 1000
+                self.confidence = confidence or 0.9
+        
+        class MockTranscript:
+            def __init__(self, utterances_data):
+                self.utterances = [MockUtterance(**utt) for utt in utterances_data]
+        
+        transcript = MockTranscript(transcript_data.get('utterances', []))
+        logger.info(f"Loaded transcript: {len(transcript.utterances)} utterances")
+        return transcript
+    
+    def transcribe_audio(self, audio_file: str, transcript_path: str = None) -> Dict:
+        """Transcribe audio using AssemblyAI or load existing transcript"""
+        if transcript_path and os.path.exists(transcript_path):
+            return self.load_existing_transcript(transcript_path)
+        
         logger.info("Starting transcription...")
         
         # Use the synchronous method
@@ -174,6 +206,7 @@ class Processor:
         
         segments = []
         utterances = transcript.utterances
+        # Use the processed audio (denoised if available, otherwise raw)
         audio = audio_data["audio"]
         sample_rate = audio_data["sample_rate"]
         source_stem = Path(source_file).stem if source_file else "source"
@@ -307,9 +340,9 @@ TTS Dataset created with local processing pipeline.
         logger.info(f"Dataset exported to: {export_dir}")
         return str(export_dir)
     
-    def process_dataset(self, file_paths: List[str], dataset_name: str) -> Dict[str, Any]:
+    def process_dataset(self, sources: List, dataset_name: str) -> Dict[str, Any]:
         """Process complete dataset"""
-        logger.info(f"Processing dataset '{dataset_name}' with {len(file_paths)} files")
+        logger.info(f"Processing dataset '{dataset_name}' with {len(sources)} sources")
         
         start_time = time.time()
         all_segments = []
@@ -327,15 +360,23 @@ TTS Dataset created with local processing pipeline.
         export_transcripts_dir = export_dir / "transcripts"
         export_transcripts_dir.mkdir(exist_ok=True)
         
-        for i, file_path in enumerate(file_paths):
-            logger.info(f"Processing file {i+1}/{len(file_paths)}: {file_path}")
+        for i, source in enumerate(sources):
+            # Handle both string paths and dict configs
+            if isinstance(source, str):
+                file_path = source
+                transcript_path = None
+            else:
+                file_path = source.get("file")
+                transcript_path = source.get("transcript")
+            
+            logger.info(f"Processing file {i+1}/{len(sources)}: {file_path}")
             
             try:
                 # Process audio
                 audio_data = self.process_audio_file(file_path)
                 
-                # Transcribe
-                transcript = self.transcribe_audio(file_path)
+                # Transcribe (use existing transcript if provided)
+                transcript = self.transcribe_audio(file_path, transcript_path)
                 
                 # Persist per-file transcript (utterances only) under dataset/transcripts
                 try:
@@ -423,7 +464,7 @@ TTS Dataset created with local processing pipeline.
         
         result = {
             "dataset_name": dataset_name,
-            "total_files": len(file_paths),
+            "total_files": len(sources),
             "total_segments": len(all_segments),
             "total_duration": total_duration,
             "unique_speakers": unique_speakers,
