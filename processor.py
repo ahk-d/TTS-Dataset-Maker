@@ -132,15 +132,19 @@ class Processor:
         """Process a single audio file"""
         logger.info(f"Processing: {file_path}")
         
-        preprocessed = preprocess_audio(
-            file_path,
-            enable_denoising=settings.denoising_enabled,
-        )
+        # Optional: run denoising/metrics, but DO NOT remove silences here.
+        # We will segment against the ORIGINAL audio to match transcript timings.
+        try:
+            preprocessed = preprocess_audio(
+                file_path,
+                enable_denoising=settings.denoising_enabled,
+            )
+        except Exception as e:
+            logger.warning(f"Preprocess failed, continuing with raw audio: {e}")
+            preprocessed = {"denoising_metrics": {}, "silence_removal_metrics": {}}
 
-        audio = preprocessed["audio"]
-        sample_rate = preprocessed["sample_rate"]
-
-        # Preserve original sample rate - no forced resampling
+        # Always load original audio at native SR for precise timestamp alignment
+        audio, sample_rate = librosa.load(file_path, sr=None, mono=True)
         audio = librosa.util.normalize(audio)
 
         return {
@@ -179,10 +183,11 @@ class Processor:
         segments_dir.mkdir(parents=True, exist_ok=True)
         
         for i, utterance in enumerate(utterances):
-            # Extract audio segment with exact sample counts (ms -> samples)
+            # Extract audio segment with exact sample counts (ms -> samples), guard bounds
             start_sample = max(0, int(round(utterance.start * sample_rate / 1000.0)))
-            expected_samples = max(0, int(round(((utterance.end - utterance.start) * sample_rate) / 1000.0)))
-            end_sample = min(len(audio), start_sample + expected_samples)
+            end_sample = max(start_sample, int(round(utterance.end * sample_rate / 1000.0)))
+            end_sample = min(len(audio), end_sample)
+            expected_samples = end_sample - start_sample
             segment_audio = audio[start_sample:end_sample]
             
             # Save audio file with source-aware, collision-proof name
@@ -309,21 +314,18 @@ TTS Dataset created with local processing pipeline.
         start_time = time.time()
         all_segments = []
 
-        # Prepare export directories and incremental metadata file upfront
-        export_dir = self.output_dir / "exports" / dataset_name
-        export_dir.mkdir(parents=True, exist_ok=True)
+        # Canonical dataset directory (single source of truth)
+        export_dir = Path("dataset")
+        export_dir.mkdir(exist_ok=True)
         export_audio_dir = export_dir / "audio"
         export_audio_dir.mkdir(exist_ok=True)
         export_metadata_path = export_dir / "metadata.json"
         if not export_metadata_path.exists():
             with open(export_metadata_path, 'w') as f:
                 json.dump([], f)
-
-        # Also prepare live dataset mirror for Label Studio/static server
-        mirror_root = Path("dataset")
-        mirror_audio_dir = mirror_root / "audio"
-        mirror_root.mkdir(exist_ok=True)
-        mirror_audio_dir.mkdir(exist_ok=True)
+        # Transcripts under dataset as well
+        export_transcripts_dir = export_dir / "transcripts"
+        export_transcripts_dir.mkdir(exist_ok=True)
         
         for i, file_path in enumerate(file_paths):
             logger.info(f"Processing file {i+1}/{len(file_paths)}: {file_path}")
@@ -335,7 +337,7 @@ TTS Dataset created with local processing pipeline.
                 # Transcribe
                 transcript = self.transcribe_audio(file_path)
                 
-                # Persist per-file transcript (utterances only) for the dataset
+                # Persist per-file transcript (utterances only) under dataset/transcripts
                 try:
                     transcript_items = []
                     for utt in getattr(transcript, 'utterances', []) or []:
@@ -347,7 +349,7 @@ TTS Dataset created with local processing pipeline.
                             "confidence": getattr(utt, 'confidence', None),
                         })
                     stem = Path(file_path).stem
-                    transcript_path = self.output_dir / "transcripts" / f"{stem}.json"
+                    transcript_path = export_transcripts_dir / f"{stem}.json"
                     with open(transcript_path, 'w') as tf:
                         json.dump({
                             "source_file": file_path,
@@ -366,15 +368,12 @@ TTS Dataset created with local processing pipeline.
                 all_segments.extend(valid_segments)
 
                 # Incrementally copy audio and append metadata for durability
-                # Copy audio files into export/audio and dataset/audio immediately
+                # Copy audio files into dataset/audio immediately
                 segments_source_dir = self.output_dir / "audio_segments"
                 for seg in valid_segments:
                     src = segments_source_dir / Path(seg["audio_file"]).name
                     if src.exists():
-                        # export
                         shutil.copy2(src, export_audio_dir / src.name)
-                        # dataset mirror
-                        shutil.copy2(src, mirror_audio_dir / src.name)
                     else:
                         logger.warning(f"Missing audio file during incremental copy: {src}")
 
@@ -402,8 +401,6 @@ TTS Dataset created with local processing pipeline.
                     ])
                     with open(export_metadata_path, 'w') as f:
                         json.dump(current, f, indent=2)
-                    # Mirror metadata to top-level dataset as well
-                    shutil.copy2(export_metadata_path, mirror_root / "metadata.json")
                 except Exception as e:
                     logger.warning(f"Failed incremental metadata append: {e}")
                 
@@ -415,27 +412,8 @@ TTS Dataset created with local processing pipeline.
         if not all_segments:
             raise ValueError("No valid segments created")
         
-        # Export dataset (rebuilds metadata and ensures completeness)
-        export_path = self.export_dataset(all_segments, dataset_name)
-
-        # Copy transcripts into export folder for completeness
-        try:
-            export_transcripts = Path(export_path) / "transcripts"
-            export_transcripts.mkdir(exist_ok=True)
-            for tfile in (self.output_dir / "transcripts").glob("*.json"):
-                shutil.copy2(tfile, export_transcripts / tfile.name)
-        except Exception as e:
-            logger.warning(f"Failed to copy transcripts to export: {e}")
-        # Final mirror (redundant but ensures latest export is reflected)
-        try:
-            export_root = Path(export_path)
-            shutil.copy2(export_root / "metadata.json", mirror_root / "metadata.json")
-            for wav in (export_root / "audio").glob("*.wav"):
-                target = mirror_audio_dir / wav.name
-                if not target.exists():
-                    shutil.copy2(wav, target)
-        except Exception as e:
-            logger.warning(f"Final mirror step failed: {e}")
+        # No secondary export or mirroring: dataset/ is the canonical output
+        export_path = str(export_dir)
         
         # Calculate statistics
         total_duration = sum(s["duration"] for s in all_segments)
