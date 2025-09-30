@@ -21,7 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 def remove_long_silences_silero(audio: np.ndarray, sample_rate: int) -> np.ndarray:
-    """Remove long silences using Silero VAD"""
+    """Remove long silences using Silero VAD
+
+    Note: Silero operates at 16kHz. We resample to 16kHz for VAD, then resample
+    the concatenated result back to the original sample rate to preserve pitch
+    and duration.
+    """
     try:
         from silero_vad import load_silero_vad, get_speech_timestamps
         
@@ -31,9 +36,11 @@ def remove_long_silences_silero(audio: np.ndarray, sample_rate: int) -> np.ndarr
         model = load_silero_vad()
         
         # Silero VAD expects 16kHz mono audio
-        if sample_rate != 16000:
-            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-            sample_rate = 16000
+        original_sr = sample_rate
+        vad_sr = 16000
+        if sample_rate != vad_sr:
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=vad_sr)
+            sample_rate = vad_sr
         
         # Convert to torch tensor
         audio_tensor = torch.from_numpy(audio).float()
@@ -63,6 +70,11 @@ def remove_long_silences_silero(audio: np.ndarray, sample_rate: int) -> np.ndarr
         
         # Concatenate speech segments
         result_audio = np.concatenate(speech_samples)
+
+        # Resample back to original sample rate if needed
+        if original_sr != sample_rate:
+            result_audio = librosa.resample(result_audio, orig_sr=sample_rate, target_sr=original_sr)
+            sample_rate = original_sr
         
         original_duration = len(audio) / sample_rate
         new_duration = len(result_audio) / sample_rate

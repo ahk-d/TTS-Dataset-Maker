@@ -24,8 +24,8 @@ async def create_audio_segments(
     # logger = get_run_logger()
     
     try:
-        # Load original audio
-        audio, sample_rate = librosa.load(audio_file, sr=24000)
+        # Load original audio at native sample rate, mono for consistency
+        audio, sample_rate = librosa.load(audio_file, sr=None, mono=True)
         
         segments = []
         utterances = diarization_result.utterances
@@ -34,29 +34,33 @@ async def create_audio_segments(
         segments_dir = Path(output_dir) / "audio_segments"
         segments_dir.mkdir(parents=True, exist_ok=True)
         
+        source_stem = Path(audio_file).stem
+
         for i, utterance in enumerate(utterances):
-            start_sample = int(utterance.start * sample_rate)
-            end_sample = int(utterance.end * sample_rate)
+            # Use exact sample counts to ensure precise durations
+            start_sample = max(0, int(round(utterance.start * sample_rate)))
+            expected_samples = max(0, int(round((utterance.end - utterance.start) * sample_rate)))
+            end_sample = min(len(audio), start_sample + expected_samples)
             
             # Extract segment
             segment_audio = audio[start_sample:end_sample]
             
-            # Save segment
-            segment_filename = f"segment_{i:06d}.wav"
+            # Save segment with source-aware, collision-proof name
+            segment_filename = f"{source_stem}_seg_{i:06d}.wav"
             segment_path = segments_dir / segment_filename
             
             sf.write(segment_path, segment_audio, sample_rate)
             
             # Create segment object
             segment = AudioSegment(
-                segment_id=f"seg_{i:06d}",
+                segment_id=f"{source_stem}_seg_{i:06d}",
                 source_file_id=os.path.basename(audio_file),
                 audio_file_path=str(segment_path),
                 text=utterance.text,
                 speaker_id=utterance.speaker,
                 start_time=utterance.start,
                 end_time=utterance.end,
-                duration=utterance.end - utterance.start,
+                duration=(end_sample - start_sample) / sample_rate,
                 sample_rate=sample_rate,
                 quality_score=utterance.confidence,
                 confidence_score=utterance.confidence,
