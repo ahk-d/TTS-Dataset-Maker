@@ -143,18 +143,26 @@ class Processor:
         try:
             if settings.denoising_enabled and os.environ.get("DISABLE_DEEPFILTERNET", "false").lower() != "true":
                 denoised, denoising_metrics = denoise_with_deepfilternet(audio, sample_rate)
-                if isinstance(denoised, np.ndarray) and len(denoised) == len(audio):
-                    audio_denoised = denoised
-                    logger.info("Using denoised audio for segmentation")
+                if isinstance(denoised, np.ndarray):
+                    # Allow small length differences due to resampling (within 1% tolerance)
+                    length_diff = abs(len(denoised) - len(audio))
+                    tolerance = max(100, len(audio) * 0.01)  # At least 100 samples or 1%
+                    
+                    if length_diff <= tolerance:
+                        audio_denoised = denoised
+                        logger.info(f"Using denoised audio for segmentation (length diff: {length_diff} samples)")
+                    else:
+                        logger.warning(f"Denoised audio length mismatch too large ({length_diff} samples); using raw for segments")
                 else:
-                    logger.warning("Denoised audio length mismatch; using raw for segments")
+                    logger.warning("Denoised audio is not a numpy array; using raw for segments")
             else:
                 logger.info("Denoising disabled; using raw audio for segmentation")
         except Exception as e:
             logger.warning(f"Denoising failed; using raw audio for segments: {e}")
 
         return {
-            "audio": audio_denoised if audio_denoised is not None else audio,
+            "audio": audio,  # Always return original audio
+            "audio_denoised": audio_denoised,  # Return denoised audio separately
             "sample_rate": sample_rate,
             "duration": len(audio) / sample_rate,
             "denoising_metrics": denoising_metrics,
@@ -171,23 +179,27 @@ class Processor:
         # Detect unit: microseconds, milliseconds, or seconds
         utterances_in = transcript_data.get('utterances', []) or []
         if utterances_in:
-            first = utterances_in[0]
-            start_val = float(first.get('start', 0))
-            end_val = float(first.get('end', 0))
+            # Sample multiple utterances to get better detection
+            sample_size = min(5, len(utterances_in))
+            max_val = 0
+            for utt in utterances_in[:sample_size]:
+                start_val = float(utt.get('start', 0))
+                end_val = float(utt.get('end', 0))
+                max_val = max(max_val, start_val, end_val)
             
-            # Check max value to determine unit
-            max_val = max(start_val, end_val)
-            if max_val >= 1e6:  # >= 1000 seconds in microseconds
+            # Determine unit based on magnitude
+            if max_val >= 1_000_000:  # >= 1000 seconds would be 1M+ microseconds
                 unit = 'us'
-                logger.info("Detected microsecond timestamps")
-            elif max_val >= 1e4:  # >= 10 seconds in milliseconds
+                logger.info(f"Detected microsecond timestamps (max value: {max_val})")
+            elif max_val >= 10000:  # >= 10 seconds would be 10K+ milliseconds
                 unit = 'ms'
-                logger.info("Detected millisecond timestamps")
-            else:
+                logger.info(f"Detected millisecond timestamps (max value: {max_val})")
+            else:  # Small values are likely seconds
                 unit = 's'
-                logger.info("Detected second timestamps")
+                logger.info(f"Detected second timestamps (max value: {max_val})")
         else:
             unit = 'ms'
+            logger.warning("No utterances found, defaulting to milliseconds")
         
         # Convert to AssemblyAI-like format with start/end in milliseconds
         class MockUtterance:
@@ -244,11 +256,13 @@ class Processor:
         if audio_data.get("audio") is None:
             raise ValueError("Missing audio in audio_data")
 
-        if audio_data.get("audio") is not None and audio_data.get("audio_denoised") is not None:
+        if audio_data.get("audio_denoised") is not None:
             # Use denoised waveform
             src_float = audio_data["audio_denoised"]
+            logger.info("Using denoised audio for segmentation")
         else:
             src_float = audio_data["audio"]
+            logger.info("Using original audio for segmentation (no denoised version available)")
 
         # Convert float32 [-1,1] -> int16 bytes for pydub
         src_int16 = np.clip(src_float, -1.0, 1.0)
