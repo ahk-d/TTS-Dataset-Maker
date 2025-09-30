@@ -2,13 +2,12 @@
     "name": "my_dataset",
     "sources": [
         {
-            "file": "/path/to/audio1.mp3",
-            "transcript": "/path/to/transcript1.json"
+            "file": "/content/audio/pb1.mp3",
+            "transcript": "/content/dataset/transcripts/pb1.json"
         },
         {
-            "file": "/path/to/audio2.wav",
-            "transcript": "/path/to/transcript2.json"
-        },
-        "/path/to/audio3.m4a"
+            "file": "/content/audio/pb2.mp3",
+            "transcript": "/content/dataset/transcripts/pb2.json"
+        }
     ]
 }

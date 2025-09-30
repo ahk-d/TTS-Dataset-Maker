@@ -200,7 +200,7 @@ class Processor:
         logger.info(f"Transcription completed: {len(transcript.utterances)} utterances")
         return transcript
     
-    def create_segments(self, transcript: Dict, dataset_name: str, audio_data: Dict, source_file: str = None) -> List[Dict]:
+    def create_segments(self, transcript: Dict, dataset_name: str, audio_data: Dict, source_file: str = None, target_segments_dir: Path = None) -> List[Dict]:
         """Create audio segments from transcript"""
         logger.info("Creating audio segments...")
         
@@ -211,8 +211,8 @@ class Processor:
         sample_rate = audio_data["sample_rate"]
         source_stem = Path(source_file).stem if source_file else "source"
         
-        # Create output directory
-        segments_dir = self.output_dir / "audio_segments"
+        # Target directory for segment files (default to dataset/audio)
+        segments_dir = target_segments_dir or (Path("dataset") / "audio")
         segments_dir.mkdir(parents=True, exist_ok=True)
         
         for i, utterance in enumerate(utterances):
@@ -220,13 +220,17 @@ class Processor:
             start_sample = max(0, int(round(utterance.start * sample_rate / 1000.0)))
             end_sample = max(start_sample, int(round(utterance.end * sample_rate / 1000.0)))
             end_sample = min(len(audio), end_sample)
-            expected_samples = end_sample - start_sample
-            segment_audio = audio[start_sample:end_sample]
+            num_samples = end_sample - start_sample
+            if num_samples <= 0:
+                logger.warning(f"Skipping zero-length segment at index {i}: start={start_sample}, end={end_sample}")
+                continue
+            segment_audio = audio[start_sample:end_sample].astype(np.float32, copy=False)
             
             # Save audio file with source-aware, collision-proof name
             audio_filename = f"{source_stem}_segment_{i}.wav"
             audio_path = segments_dir / audio_filename
-            sf.write(audio_path, segment_audio, sample_rate)
+            # Write WAV safely
+            sf.write(audio_path, segment_audio, sample_rate, subtype='PCM_16')
             
             # Create segment metadata
             segment = {
@@ -400,23 +404,21 @@ TTS Dataset created with local processing pipeline.
                 except Exception as e:
                     logger.warning(f"Failed to save transcript for {file_path}: {e}")
                 
-                # Create segments
-                segments = self.create_segments(transcript, dataset_name, audio_data, file_path)
+                # Create segments directly under dataset/audio
+                segments = self.create_segments(
+                    transcript,
+                    dataset_name,
+                    audio_data,
+                    file_path,
+                    target_segments_dir=export_audio_dir,
+                )
                 
                 # Validate segments
                 valid_segments = self.validate_segments(segments)
                 
                 all_segments.extend(valid_segments)
 
-                # Incrementally copy audio and append metadata for durability
-                # Copy audio files into dataset/audio immediately
-                segments_source_dir = self.output_dir / "audio_segments"
-                for seg in valid_segments:
-                    src = segments_source_dir / Path(seg["audio_file"]).name
-                    if src.exists():
-                        shutil.copy2(src, export_audio_dir / src.name)
-                    else:
-                        logger.warning(f"Missing audio file during incremental copy: {src}")
+                # Append metadata (audio already written to dataset/audio)
 
                 # Append to export metadata.json atomically
                 try:
