@@ -66,3 +66,4 @@ label_studio_import.json
 # Config files (keep examples only)
 configs/*.json
 !configs/example_config.md
+.DS_Store

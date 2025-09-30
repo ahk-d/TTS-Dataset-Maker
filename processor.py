@@ -139,10 +139,7 @@ class Processor:
         audio = preprocessed["audio"]
         sample_rate = preprocessed["sample_rate"]
 
-        if sample_rate != 24000:
-            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=24000)
-            sample_rate = 24000
-
+        # Preserve original sample rate - no forced resampling
         audio = librosa.util.normalize(audio)
 
         return {
@@ -166,7 +163,7 @@ class Processor:
         logger.info(f"Transcription completed: {len(transcript.utterances)} utterances")
         return transcript
     
-    def create_segments(self, transcript: Dict, dataset_name: str, audio_data: Dict) -> List[Dict]:
+    def create_segments(self, transcript: Dict, dataset_name: str, audio_data: Dict, source_file: str = None) -> List[Dict]:
         """Create audio segments from transcript"""
         logger.info("Creating audio segments...")
         
@@ -199,7 +196,9 @@ class Processor:
                 "end_time": utterance.end / 1000.0,
                 "duration": (utterance.end - utterance.start) / 1000.0,
                 "confidence": utterance.confidence,
-                "audio_file": f"audio/{audio_filename}"
+                "audio_file": f"audio/{audio_filename}",
+                "source_file": source_file,  # Include original file path for tracing
+                "sample_rate": sample_rate  # Preserve original sample rate
             }
             segments.append(segment)
         
@@ -247,8 +246,9 @@ class Processor:
                 "audio_file": segment["audio_file"],
                 "text": segment["text"],
                 "speaker_id": segment["speaker_id"],
+                "source_file": segment.get("source_file"),  # Include source file for tracing
                 "duration": segment["duration"],
-                "sample_rate": 24000,
+                "sample_rate": segment.get("sample_rate", 44100),  # Use actual sample rate
                 "language": "en",
                 "quality_score": segment["confidence"],
                 "confidence_score": segment["confidence"],
@@ -317,7 +317,7 @@ TTS Dataset created with local processing pipeline.
                 transcript = self.transcribe_audio(file_path)
                 
                 # Create segments
-                segments = self.create_segments(transcript, dataset_name, audio_data)
+                segments = self.create_segments(transcript, dataset_name, audio_data, file_path)
                 
                 # Validate segments
                 valid_segments = self.validate_segments(segments)

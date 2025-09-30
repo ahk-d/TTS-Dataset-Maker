@@ -5,6 +5,7 @@
   <View style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-radius: 8px;">
     <Text name="segment_info" value="Segment ID: $segment_id | Speaker: $speaker_id | Duration: $duration s"/>
     <Text name="confidence_info" value="Confidence: $confidence_score | Quality: $quality_score"/>
+    <Text name="source_info" value="Source: $source_file" style="font-size: 12px; color: #666; margin-top: 4px;"/>
   </View>
   
   <!-- Original Transcription -->
