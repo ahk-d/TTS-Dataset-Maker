@@ -1,6 +1,14 @@
 {
-    "name": "dataset",
+    "name": "my_dataset",
     "sources": [
-        ""
+        {
+            "file": "/path/to/audio1.mp3",
+            "transcript": "/path/to/transcript1.json"
+        },
+        {
+            "file": "/path/to/audio2.wav",
+            "transcript": "/path/to/transcript2.json"
+        },
+        "/path/to/audio3.m4a"
     ]
 }
